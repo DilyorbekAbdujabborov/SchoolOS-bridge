@@ -1,0 +1,70 @@
+{
+ "AcsEvent": {
+  "searchID": "cap",
+  "totalMatches": 8,
+  "responseStatusStrg": "MORE",
+  "numOfMatches": 3,
+  "InfoList": [
+   {
+    "major": 5,
+    "minor": 75,
+    "time": "2026-10-10T08:55:07+05:00",
+    "cardType": 1,
+    "name": "Test Student",
+    "cardReaderNo": 1,
+    "doorNo": 1,
+    "employeeNoString": "1000000001",
+    "serialNo": 128292,
+    "userType": "normal",
+    "currentVerifyMode": "faceOrFpOrCardOrPw",
+    "mask": "no",
+    "FaceRect": {
+     "height": 0.316,
+     "width": 0.179,
+     "x": 0.592,
+     "y": 0.466
+    }
+   },
+   {
+    "major": 5,
+    "minor": 75,
+    "time": "2026-10-10T08:55:15+05:00",
+    "cardType": 1,
+    "name": "Test Student",
+    "cardReaderNo": 1,
+    "doorNo": 1,
+    "employeeNoString": "1000000001",
+    "serialNo": 128295,
+    "userType": "normal",
+    "currentVerifyMode": "faceOrFpOrCardOrPw",
+    "mask": "no",
+    "FaceRect": {
+     "height": 0.306,
+     "width": 0.173,
+     "x": 0.672,
+     "y": 0.479
+    }
+   },
+   {
+    "major": 5,
+    "minor": 75,
+    "time": "2026-10-10T08:56:49+05:00",
+    "cardType": 1,
+    "name": "Test Student",
+    "cardReaderNo": 1,
+    "doorNo": 1,
+    "employeeNoString": "1000000001",
+    "serialNo": 128298,
+    "userType": "normal",
+    "currentVerifyMode": "faceOrFpOrCardOrPw",
+    "mask": "no",
+    "FaceRect": {
+     "height": 0.376,
+     "width": 0.213,
+     "x": 0.587,
+     "y": 0.424
+    }
+   }
+  ]
+ }
+}

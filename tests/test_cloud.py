@@ -1,0 +1,74 @@
+import unittest
+from unittest import mock
+
+import requests
+
+from schoolos_bridge.cloud import CloudClient, CloudError, CloudRejected
+
+
+def _response(status, json=None, content=b""):
+    r = mock.Mock(status_code=status, content=content)
+    r.json.return_value = json
+    r.ok = 200 <= status < 300
+    return r
+
+
+class CloudClientTests(unittest.TestCase):
+    def setUp(self):
+        self.session = mock.Mock()
+        self.client = CloudClient("https://cloud.test/", "tok", session=self.session)
+
+    def test_push_events_posts_list_with_bearer(self):
+        self.session.request.return_value = _response(200, {"accepted": ["k"]})
+        self.assertEqual(self.client.push_events([{"osid": "1"}]), {"accepted": ["k"]})
+        method, url = self.session.request.call_args.args
+        kwargs = self.session.request.call_args.kwargs
+        self.assertEqual((method, url), ("POST", "https://cloud.test/api/devices/events/"))
+        self.assertEqual(kwargs["json"], [{"osid": "1"}])
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer tok")
+
+    def test_fetch_photo_404_is_none(self):
+        self.session.request.return_value = _response(404)
+        self.assertIsNone(self.client.fetch_photo(7))
+
+    def test_fetch_photo_returns_bytes(self):
+        self.session.request.return_value = _response(200, content=b"img")
+        self.assertEqual(self.client.fetch_photo(7), b"img")
+        self.assertEqual(
+            self.session.request.call_args.args[1], "https://cloud.test/api/devices/commands/7/photo/"
+        )
+
+    def test_server_error_raises(self):
+        self.session.request.return_value = _response(500)
+        with self.assertRaises(CloudError):
+            self.client.fetch_commands()
+
+    def test_network_error_raises(self):
+        self.session.request.side_effect = requests.ConnectionError("down")
+        with self.assertRaises(CloudError):
+            self.client.heartbeat([{"serial": "s", "ip": "1.2.3.4"}])
+
+    def test_ack_posts_status(self):
+        self.session.request.return_value = _response(200, {"id": 3, "status": "DONE"})
+        self.client.ack(3, "DONE")
+        self.assertEqual(self.session.request.call_args.kwargs["json"], {"status": "DONE", "result": ""})
+
+    def test_bad_request_is_rejected_not_transient(self):
+        self.session.request.return_value = _response(400)
+        with self.assertRaises(CloudRejected):
+            self.client.push_events([{"osid": ""}])
+
+    def test_unauthorized_is_transient(self):
+        self.session.request.return_value = _response(401)
+        with self.assertRaises(CloudError) as ctx:
+            self.client.push_events([])
+        self.assertNotIsInstance(ctx.exception, CloudRejected)
+
+
+class CloudRosterPhotoTests(unittest.TestCase):
+    def test_fetch_photo_for_roster_member_passes_osid(self):
+        session = mock.Mock()
+        session.request.return_value = _response(200, content=b"img")
+        client = CloudClient("https://cloud.test/", "tok", session=session)
+        self.assertEqual(client.fetch_photo(7, osid="1000000001"), b"img")
+        self.assertEqual(session.request.call_args.kwargs["params"], {"osid": "1000000001"})

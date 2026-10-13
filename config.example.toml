@@ -1,0 +1,17 @@
+# SchoolOS bridge — one per school. Copy to /etc/schoolos-bridge.toml (chmod 600):
+# it holds the terminal admin passwords, which never leave this machine.
+
+cloud_url = "https://tochna.uz"
+token = "PASTE-BRIDGE-TOKEN-FROM-ADMIN"
+poll_seconds = 2
+state_file = "/var/lib/schoolos-bridge/state.json"
+listen_host = "0.0.0.0"
+listen_port = 8099
+
+[[devices]]
+serial = "DS-K1T343MFWX20250109V043800ENGE6653285"
+vendor = "hikvision"
+ip = "192.168.43.65"
+username = "admin"
+password = "CHANGE-ME"
+direction = "IN"

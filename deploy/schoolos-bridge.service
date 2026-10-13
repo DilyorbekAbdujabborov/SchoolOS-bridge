@@ -1,0 +1,21 @@
+[Unit]
+Description=SchoolOS bridge (school LAN terminals <-> SchoolOS cloud)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=schoolos-bridge
+Group=schoolos-bridge
+WorkingDirectory=/opt/schoolos-bridge
+ExecStart=/opt/schoolos-bridge/venv/bin/python -m schoolos_bridge --config /etc/schoolos-bridge.toml
+Restart=always
+RestartSec=5
+StateDirectory=schoolos-bridge
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
