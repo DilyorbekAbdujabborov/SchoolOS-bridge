@@ -28,6 +28,10 @@ def _page(events, more):
     return page
 
 
+def _img(content, status=200):
+    return mock.Mock(status_code=status, content=content)
+
+
 class HikvisionDriverTests(unittest.TestCase):
     def setUp(self):
         self.http = mock.Mock()
@@ -177,6 +181,56 @@ class HikvisionDriverTests(unittest.TestCase):
         door = json.dumps({"eventType": "AccessControllerEvent", "dateTime": "x",
                            "AccessControllerEvent": {"majorEventType": 5, "subEventType": 21}}).encode()
         self.assertEqual(self.driver.parse_push(door, "application/json"), [])
+
+
+class HikvisionCameraTests(unittest.TestCase):
+    def setUp(self):
+        self.http = mock.Mock()
+        self.driver = HikvisionDriver(CFG, http=self.http)
+
+    def calls(self):
+        return [(c.args[0], c.args[1].split("10.0.0.5")[1]) for c in self.http.request.call_args_list]
+
+    def test_capture_returns_first_jpeg(self):
+        self.http.request.return_value = _img(b"\xff\xd8\xff\xe0jpeg")
+        self.assertEqual(self.driver.capture(), b"\xff\xd8\xff\xe0jpeg")
+        self.assertEqual(self.calls(), [("GET", "/ISAPI/Streaming/channels/101/picture")])
+
+    def test_capture_skips_non_jpeg_then_succeeds(self):
+        self.http.request.side_effect = [_img(b"<xml>"), _img(b"\xff\xd8ok")]
+        self.assertEqual(self.driver.capture(), b"\xff\xd8ok")
+        self.assertEqual(
+            [p for _, p in self.calls()],
+            ["/ISAPI/Streaming/channels/101/picture", "/ISAPI/Streaming/channels/1/picture"],
+        )
+
+    def test_capture_raises_without_snapshot(self):
+        self.http.request.return_value = _img(b"nope", status=500)
+        with self.assertRaises(DriverError):
+            self.driver.capture()
+
+    def test_search_face_parses_matches_best_first(self):
+        self.http.request.return_value = _resp({"statusCode": 1, "MatchList": [
+            {"FPID": "1000000001", "similarity": "88.5"},
+            {"FPID": "1000000002"},
+            {"similarity": "50"},
+        ]})
+        matches = self.driver.search_face(b"\xff\xd8face")
+        self.assertEqual([(m.osid, m.similarity) for m in matches],
+                         [("1000000001", 88.5), ("1000000002", None)])
+        self.assertEqual(self.calls(), [("POST", "/ISAPI/Intelligent/FDLib/FDSearch?format=json")])
+        cond = json.loads(self.http.request.call_args.kwargs["files"]["FDSearchCond"][1])
+        self.assertEqual(cond, {"searchResultPosition": 0, "maxResults": 5, "faceLibType": "blackFD", "FDID": "1"})
+
+    def test_search_face_empty(self):
+        self.http.request.return_value = _resp({"statusCode": 1})
+        self.assertEqual(self.driver.search_face(b"jpg"), [])
+
+    def test_search_face_score_aliases(self):
+        self.http.request.return_value = _resp({"MatchList": [
+            {"FPID": "1", "faceScore": "70"}, {"FPID": "2", "score": 40},
+        ]})
+        self.assertEqual([m.similarity for m in self.driver.search_face(b"x")], [70.0, 40.0])
 
 
 def _users_page(users, more, total=None):

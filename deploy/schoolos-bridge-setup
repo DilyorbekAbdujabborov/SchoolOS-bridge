@@ -1,0 +1,20 @@
+#!/bin/sh
+# Run the SchoolOS bridge's local setup wizard (a LAN web page, separate from
+# the SchoolOS web app). It scans for terminals, takes their admin passwords and
+# writes the bridge config.
+#
+#   sudo ./schoolos-bridge-setup              # writes /etc/schoolos-bridge.toml
+#   ./schoolos-bridge-setup --port 8098 --pin 123456
+#
+# On an installed bridge the config is owned by the schoolos-bridge user, so run
+# this the same way the installer set it up (the wizard keeps that ownership).
+set -eu
+
+PYTHON="${SCHOOLOS_BRIDGE_PYTHON:-/opt/schoolos-bridge/venv/bin/python}"
+if [ ! -x "$PYTHON" ]; then
+    PYTHON="$(command -v python3 || command -v python)"
+fi
+
+CONFIG="${SCHOOLOS_BRIDGE_CONFIG:-/etc/schoolos-bridge.toml}"
+
+exec "$PYTHON" -m schoolos_bridge.setup --config "$CONFIG" "$@"

@@ -76,3 +76,34 @@ class CloudClient:
         if not response.ok:
             error = CloudRejected if response.status_code in REJECTED_STATUSES else CloudError
             raise error(f"POST capture: HTTP {response.status_code}")
+
+    def upload_unmatched(
+        self,
+        device_serial: str,
+        osid: str,
+        event_time: str,
+        photo: bytes,
+        candidate_osid: str | None = None,
+        similarity: float | None = None,
+    ) -> None:
+        """Report a face a terminal could not match, with the shot the bridge
+        took and (when the terminal found one) its closest library face."""
+        data = {"device_serial": device_serial, "osid": osid, "event_time": event_time}
+        if candidate_osid:
+            data["candidate_osid"] = candidate_osid
+        if similarity is not None:
+            data["similarity"] = str(similarity)
+        try:
+            response = self.session.request(
+                "POST",
+                f"{self.base_url}/api/devices/unmatched/",
+                headers={"Authorization": f"Bearer {self.token}"},
+                data=data,
+                files={"photo": ("face.jpg", photo, "image/jpeg")},
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise CloudError(f"POST unmatched: {exc}") from exc
+        if not response.ok:
+            error = CloudRejected if response.status_code in REJECTED_STATUSES else CloudError
+            raise error(f"POST unmatched: HTTP {response.status_code}")

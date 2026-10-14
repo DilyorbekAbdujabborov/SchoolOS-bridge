@@ -19,7 +19,15 @@ from zoneinfo import ZoneInfo
 import requests
 from requests.auth import HTTPDigestAuth
 
-from .base import DeviceDriver, DeviceProbe, DriverError, Person, RawEvent, TerminalPerson
+from .base import (
+    DeviceDriver,
+    DeviceProbe,
+    DriverError,
+    FaceMatch,
+    Person,
+    RawEvent,
+    TerminalPerson,
+)
 
 SCHOOL_TZ = ZoneInfo("Asia/Tashkent")
 #: POSIX zone string for UTC+5 (the sign is inverted in POSIX notation).
@@ -50,6 +58,19 @@ def _posix_offset(posix: str) -> timezone:
 def _tag(text: str, name: str) -> str | None:
     match = re.search(rf"<{name}>([^<]+)</{name}>", text)
     return match.group(1) if match else None
+
+
+def _similarity(row: dict) -> float | None:
+    """A face-search hit's similarity, when the terminal reports one. Some
+    firmwares only return `modelData`, in which case the order still tells us
+    the best match but the score is unknown."""
+    for key in ("similarity", "faceScore", "score"):
+        if row.get(key) not in (None, ""):
+            try:
+                return float(row[key])
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 class HikvisionDriver(DeviceDriver):
@@ -165,6 +186,32 @@ class HikvisionDriver(DeviceDriver):
             if response.status_code < 400 and response.content.startswith(JPEG_SOI):
                 return response.content
         raise DriverError("capture: terminal did not return a snapshot")
+
+    def search_face(self, photo: bytes, max_results: int = 5) -> list[FaceMatch]:
+        """The terminal's own 1:N face search over its library (`FDSearch`), best
+        first. `FPID` is the OSID we enrolled with, so a hit names the person
+        whose enrolled face a shot resembles."""
+        cond = {
+            "searchResultPosition": 0,
+            "maxResults": max_results,
+            "faceLibType": "blackFD",
+            "FDID": "1",
+        }
+        body = self._json(
+            "POST",
+            "/ISAPI/Intelligent/FDLib/FDSearch?format=json",
+            files={
+                "FDSearchCond": (None, json.dumps(cond), "application/json"),
+                "img": ("face.jpg", photo, "image/jpeg"),
+            },
+        )
+        matches = []
+        for row in body.get("MatchList") or []:
+            osid = str(row.get("FPID") or "")
+            if not osid:
+                continue
+            matches.append(FaceMatch(osid=osid, similarity=_similarity(row)))
+        return matches
 
     # -- events ----------------------------------------------------------------
     def _event(self, osid, time, cursor, verify_mode, raw) -> RawEvent:

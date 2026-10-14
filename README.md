@@ -11,7 +11,9 @@ access-control terminals and is the only thing that talks to them:
   10-digit OSID users that are not terminal admins, and never on an empty roster;
 - `CAPTURE`: the terminal snaps a fresh photo of the person standing in front of
   it and the bridge uploads it to the cloud (stored as their avatar, then enrolled);
-- heartbeat with each terminal's LAN IP every minute.
+- heartbeat with each terminal's identity (serial, model, IP, location,
+  direction) every minute — this is also how the cloud learns about a terminal
+  configured on the bridge, and registers it.
 
 Traffic to the cloud is outbound HTTPS only; nothing on the school network has
 to be reachable from the internet. Terminal admin passwords live only in the
@@ -30,19 +32,56 @@ sudo python3 -m venv /opt/schoolos-bridge/venv
 sudo /opt/schoolos-bridge/venv/bin/pip install -r /opt/schoolos-bridge/requirements.txt
 sudo cp config.example.toml /etc/schoolos-bridge.toml
 sudo chown schoolos-bridge: /etc/schoolos-bridge.toml && sudo chmod 600 /etc/schoolos-bridge.toml
-sudoedit /etc/schoolos-bridge.toml     # token, terminal IP + password
 sudo cp deploy/schoolos-bridge.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now schoolos-bridge
 journalctl -u schoolos-bridge -f
 ```
 
+Fill the config with the **local setup wizard** below (it finds the terminals on
+the LAN and writes the token, IPs and passwords for you), or edit
+`/etc/schoolos-bridge.toml` by hand.
+
 The bridge token comes from the director's **Terminallar** page
 (`/app/director/terminals`): "Bridge qo'shish" creates a bridge and shows its
 token once — copy it into `token` in the config. Lost it? "Yangi token" issues
-a new one (the old token stops working). Then add each terminal there with
-"Terminal qo'shish" (bridge, serial, IP, location, direction); a new active
-terminal gets every member of the school automatically, and "Sinxronlash"
-re-pushes on demand.
+a new one (the old token stops working).
+
+You do **not** have to add each terminal on that page by hand: a bridge reports
+the serial, model, IP, location and direction of every terminal it drives, and
+the cloud registers any it does not know yet. A newly registered active terminal
+gets every member of the school automatically, and "Sinxronlash" re-pushes on
+demand. (The page's "Terminal qo'shish" still exists for adding one manually or
+editing a bridge/serial by hand.)
+
+## Local setup wizard
+
+A small web page served **by the bridge itself** on the school LAN — separate
+from the SchoolOS web app. A technician opens it, scans the network, types each
+terminal's admin password, and the bridge writes its config. Terminal passwords
+never leave the machine, and the browser never sees the saved ones back.
+
+```bash
+# from the bridge/ directory (or /opt/schoolos-bridge on an installed bridge)
+sudo ./deploy/schoolos-bridge-setup
+```
+
+It prints a URL and a one-time **PIN**; open the URL from any device on the same
+network and type the PIN. The wizard:
+
+1. **Bulut** — paste the cloud URL and bridge token, "Aloqani tekshirish" proves
+   the token with an empty heartbeat.
+2. **Terminallar** — "Tarmoqni skanerlash" sweeps the local `/24` (or type a
+   CIDR, a single IP, or a range like `192.168.1.10-40`). Hosts that answer
+   ISAPI are listed; type the admin password and "Tekshirish" reads the serial,
+   model, firmware and clock through the same driver the bridge uses. Set the
+   location label and direction per terminal.
+3. **Saqlash** — writes `config.toml` (chmod 600), registers the terminals with
+   the cloud (so they exist and start syncing even before the service runs), and
+   runs the same PASS/WARN/FAIL checks as `schoolos-bridge check`.
+
+Flags: `--port` (default 8098), `--host` (default `0.0.0.0`), `--pin` (fix the
+PIN), `--no-auth` (trusted machine only), `--scan-timeout`. Restart the service
+afterwards: `sudo systemctl restart schoolos-bridge`.
 
 ## Terminal setup (Hikvision)
 
@@ -56,4 +95,5 @@ re-pushes on demand.
 ```bash
 python -m unittest            # from bridge/
 python -m schoolos_bridge --config config.toml --once
+python -m schoolos_bridge.setup --config config.toml --port 8098   # setup wizard
 ```

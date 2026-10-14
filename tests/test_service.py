@@ -7,7 +7,7 @@ from pathlib import Path
 
 from schoolos_bridge.cloud import CloudError, CloudRejected
 from schoolos_bridge.config import Config, DeviceConfig
-from schoolos_bridge.drivers import DeviceDriver, DriverError, RawEvent, TerminalPerson
+from schoolos_bridge.drivers import DeviceDriver, DriverError, FaceMatch, RawEvent, TerminalPerson
 from schoolos_bridge.listener import make_server
 from schoolos_bridge.service import Bridge
 from schoolos_bridge.state import State
@@ -28,6 +28,7 @@ class FakeDriver(DeviceDriver):
         self.persons = []
         self.zones = []
         self.fail_osids = set()
+        self.face_matches = []
 
     def ensure_time(self):
         pass
@@ -63,6 +64,11 @@ class FakeDriver(DeviceDriver):
             raise DriverError(self.fail)
         return b"\xff\xd8photo"
 
+    def search_face(self, photo, max_results=5):
+        if self.fail:
+            raise DriverError(self.fail)
+        return list(self.face_matches[:max_results])
+
 
 class FakeCloud:
     def __init__(self):
@@ -71,6 +77,9 @@ class FakeCloud:
         self.photos = {}
         self.uploads = []
         self.poison = set()
+        self.unmatched_osids = set()
+        self.unmatched_uploads = []
+        self.upload_fail = False
 
     def push_events(self, events):
         if self.down:
@@ -78,7 +87,8 @@ class FakeCloud:
         if any(e["raw"]["serialNo"] in self.poison for e in events):
             raise CloudRejected("HTTP 400")
         self.pushed.append(events)
-        return {"accepted": [e["osid"] for e in events]}
+        unmatched = [f"1:2026-10-10T08:00:00+05:00:{e['osid']}" for e in events if e["osid"] in self.unmatched_osids]
+        return {"accepted": [e["osid"] for e in events], "unmatched": unmatched}
 
     def heartbeat(self, devices):
         self.heartbeats.append(devices)
@@ -97,6 +107,11 @@ class FakeCloud:
 
     def upload_capture(self, command_id, photo):
         self.uploads.append((command_id, photo))
+
+    def upload_unmatched(self, device_serial, osid, event_time, photo, candidate_osid=None, similarity=None):
+        if self.upload_fail:
+            raise CloudError("down")
+        self.unmatched_uploads.append((device_serial, osid, event_time, photo, candidate_osid, similarity))
 
 
 class BridgeTests(unittest.TestCase):
@@ -236,7 +251,21 @@ class BridgeTests(unittest.TestCase):
 
     def test_heartbeat_reports_device_ips(self):
         self.bridge.tick()
-        self.assertEqual(self.cloud.heartbeats, [[{"serial": SERIAL, "ip": "10.0.0.5"}]])
+        self.assertEqual(
+            self.cloud.heartbeats,
+            [
+                [
+                    {
+                        "serial": SERIAL,
+                        "ip": "10.0.0.5",
+                        "vendor": "hikvision",
+                        "model": "",
+                        "direction": "IN",
+                        "location_label": "",
+                    }
+                ]
+            ],
+        )
         self.bridge.tick()
         self.assertEqual(len(self.cloud.heartbeats), 1)  # throttled to once a minute
 
@@ -330,6 +359,66 @@ class SyncCommandTests(BridgeTests.__base__):
                                 "payload": {"osid": "1000000001"}}]
         self.bridge.tick()
         self.assertIsNone(self.bridge.state.face(SERIAL, "1000000001"))
+
+
+class UnmatchedTests(BridgeTests.__base__):
+    setUp = BridgeTests.setUp
+    _bridge = BridgeTests._bridge
+
+    def _unmatched_tick(self, cursor=10, osid="5893949988"):
+        self.driver.events = [_event(cursor, osid=osid)]
+        self.cloud.unmatched_osids = {osid}
+        self.bridge.tick()
+
+    def test_unknown_event_snapshots_and_reports_candidate(self):
+        self.driver.face_matches = [FaceMatch("1000000001", 88.0)]
+        self._unmatched_tick()
+        self.assertEqual(
+            self.cloud.unmatched_uploads,
+            [(SERIAL, "5893949988", "2026-10-10T08:00:00+05:00", b"\xff\xd8photo", "1000000001", 88.0)],
+        )
+
+    def test_unknown_without_match_reports_no_candidate(self):
+        self._unmatched_tick()
+        upload = self.cloud.unmatched_uploads[0]
+        self.assertIsNone(upload[4])
+        self.assertIsNone(upload[5])
+
+    def test_low_similarity_match_is_ignored(self):
+        self.driver.face_matches = [FaceMatch("1000000001", 30.0)]
+        self._unmatched_tick()
+        self.assertIsNone(self.cloud.unmatched_uploads[0][4])
+
+    def test_similarity_missing_is_accepted(self):
+        self.driver.face_matches = [FaceMatch("1000000001", None)]
+        self._unmatched_tick()
+        self.assertEqual(self.cloud.unmatched_uploads[0][4], "1000000001")
+
+    def test_match_equal_to_stranger_osid_is_ignored(self):
+        self.driver.face_matches = [FaceMatch("5893949988", 99.0)]
+        self._unmatched_tick()
+        self.assertIsNone(self.cloud.unmatched_uploads[0][4])
+
+    def test_known_event_is_not_snapshotted(self):
+        self.driver.events = [_event(10, osid="1000000001")]
+        self.bridge.tick()
+        self.assertEqual(self.cloud.unmatched_uploads, [])
+
+    def test_snapshots_are_throttled_per_device(self):
+        self.driver.face_matches = []
+        self._unmatched_tick(cursor=10)
+        self._unmatched_tick(cursor=11)
+        self.assertEqual(len(self.cloud.unmatched_uploads), 1)
+
+    def test_snapshot_failure_is_swallowed(self):
+        self.driver.fail = "cameraBusy"
+        self._unmatched_tick()
+        self.assertEqual(self.cloud.unmatched_uploads, [])
+
+    def test_upload_failure_is_swallowed(self):
+        self.cloud.upload_fail = True
+        self._unmatched_tick()
+        self.assertEqual(self.cloud.unmatched_uploads, [])
 
 
 class ListenerTests(unittest.TestCase):

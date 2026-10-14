@@ -31,6 +31,14 @@ class TerminalPerson:
 
 
 @dataclass(frozen=True)
+class FaceMatch:
+    """One hit from a 1:N face search on a terminal's own face library."""
+
+    osid: str
+    similarity: float | None = None
+
+
+@dataclass(frozen=True)
 class DeviceProbe:
     """What `schoolos-bridge check` reads from a terminal (no side effects)."""
 
@@ -112,3 +120,9 @@ class DeviceDriver(ABC):
         Raises `DriverError` when the terminal cannot take one. Vendors without
         a camera leave this unsupported."""
         raise DriverError("capture not supported by this driver")
+
+    def search_face(self, photo: bytes, max_results: int = 5) -> list[FaceMatch]:
+        """The closest faces to `photo` in the terminal's own face library, best
+        first — used to guess whose bad enrollment an unknown shot belongs to.
+        Raises `DriverError`; vendors without face search leave this unsupported."""
+        raise DriverError("face search not supported by this driver")

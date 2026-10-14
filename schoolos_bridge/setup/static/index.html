@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="uz">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>SchoolOS bridge — sozlash</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <span>SchoolOS bridge</span>
+        <span class="brand-sub">mahalliy sozlash</span>
+      </div>
+      <div class="pin-box" id="pinBox" hidden>
+        <label for="pin">PIN</label>
+        <input id="pin" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="000000" />
+        <button class="btn btn-ghost btn-sm" id="pinSave" type="button">Saqlash</button>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="intro">
+        <h1>Terminallarni toping va sozlang</h1>
+        <p>
+          Bu usta maktab tarmog'idagi yuz terminallarini o'zi topadi, parolni kiritib tekshiradi va
+          bridge sozlamasini yozib beradi. Terminal bilan bir tarmoqda turing.
+        </p>
+        <dl class="facts" id="facts"></dl>
+      </section>
+
+      <ol class="steps" id="steps">
+        <li class="step-chip" data-step="cloud"><span class="num">1</span> Bulut</li>
+        <li class="step-chip" data-step="terminals"><span class="num">2</span> Terminallar</li>
+        <li class="step-chip" data-step="save"><span class="num">3</span> Saqlash</li>
+      </ol>
+
+      <!-- 1. Cloud -->
+      <section class="card" id="card-cloud">
+        <div class="card-head">
+          <h2>Bulut bilan aloqa</h2>
+          <span class="pill" id="cloudState">tekshirilmagan</span>
+        </div>
+        <div class="card-body grid-2">
+          <label class="field">
+            <span>Bulut manzili</span>
+            <input id="cloudUrl" type="url" placeholder="https://tochna.uz" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Bridge tokeni <em id="tokenHint"></em></span>
+            <input id="cloudToken" type="text" placeholder="Terminallar sahifasidan olingan token" autocomplete="off" />
+          </label>
+        </div>
+        <div class="card-foot">
+          <button class="btn btn-primary" id="cloudTest" type="button">Aloqani tekshirish</button>
+          <p class="note" id="cloudNote">Token yangi bridge yaratilganda faqat bir marta ko'rsatiladi.</p>
+        </div>
+      </section>
+
+      <!-- 2. Terminals -->
+      <section class="card" id="card-terminals">
+        <div class="card-head">
+          <h2>Tarmoqdagi terminallar</h2>
+          <span class="pill" id="scanState" hidden></span>
+        </div>
+        <div class="scan-row">
+          <label class="field grow">
+            <span>Tarmoq (CIDR, IP yoki oraliq)</span>
+            <input id="scanTarget" type="text" placeholder="192.168.1.0/24" autocomplete="off" />
+          </label>
+          <button class="btn btn-primary" id="scanBtn" type="button">Tarmoqni skanerlash</button>
+          <button class="btn btn-ghost" id="addManual" type="button">IP qo'shish</button>
+        </div>
+        <p class="note">Topilgan har bir terminalga admin parolini kiriting va «Tekshirish»ni bosing.</p>
+        <div class="term-list" id="termList"></div>
+      </section>
+
+      <!-- 3. Save -->
+      <section class="card" id="card-save">
+        <div class="card-head">
+          <h2>Saqlash va tekshirish</h2>
+          <span class="pill" id="saveState" hidden></span>
+        </div>
+        <div class="card-foot wrap-foot">
+          <button class="btn btn-primary" id="saveBtn" type="button">Sozlamani saqlash</button>
+          <button class="btn btn-secondary" id="checkBtn" type="button" disabled>Tekshiruvni ishga tushirish</button>
+        </div>
+        <div class="checks" id="checks" hidden></div>
+        <div class="next-steps" id="nextSteps" hidden>
+          <h3>Keyingi qadam</h3>
+          <p>Bridge xizmatini qayta ishga tushiring:</p>
+          <pre><code>sudo systemctl restart schoolos-bridge
+journalctl -u schoolos-bridge -f</code></pre>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" hidden></div>
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

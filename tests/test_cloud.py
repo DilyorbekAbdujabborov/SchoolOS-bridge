@@ -72,3 +72,38 @@ class CloudRosterPhotoTests(unittest.TestCase):
         client = CloudClient("https://cloud.test/", "tok", session=session)
         self.assertEqual(client.fetch_photo(7, osid="1000000001"), b"img")
         self.assertEqual(session.request.call_args.kwargs["params"], {"osid": "1000000001"})
+
+    def test_upload_unmatched_posts_multipart_with_metadata(self):
+        session = mock.Mock()
+        session.request.return_value = _response(201, {"id": 5, "status": "NEW"})
+        client = CloudClient("https://cloud.test/", "tok", session=session)
+        client.upload_unmatched(
+            "SER-1", "5893949988", "2026-10-10T08:00:00+05:00", b"\xff\xd8face",
+            candidate_osid="1000000001", similarity=88.5,
+        )
+        method, url = session.request.call_args.args
+        kwargs = session.request.call_args.kwargs
+        self.assertEqual((method, url), ("POST", "https://cloud.test/api/devices/unmatched/"))
+        data = kwargs["data"]
+        self.assertEqual(data["device_serial"], "SER-1")
+        self.assertEqual(data["osid"], "5893949988")
+        self.assertEqual(data["event_time"], "2026-10-10T08:00:00+05:00")
+        self.assertEqual(data["candidate_osid"], "1000000001")
+        self.assertEqual(data["similarity"], "88.5")
+        self.assertEqual(kwargs["files"]["photo"][1], b"\xff\xd8face")
+
+    def test_upload_unmatched_omits_candidate_when_unknown(self):
+        session = mock.Mock()
+        session.request.return_value = _response(201, {"id": 5, "status": "NEW"})
+        client = CloudClient("https://cloud.test/", "tok", session=session)
+        client.upload_unmatched("SER-1", "5893949988", "2026-10-10T08:00:00+05:00", b"jpg")
+        data = session.request.call_args.kwargs["data"]
+        self.assertNotIn("candidate_osid", data)
+        self.assertNotIn("similarity", data)
+
+    def test_upload_unmatched_rejected_raises(self):
+        session = mock.Mock()
+        session.request.return_value = _response(400)
+        client = CloudClient("https://cloud.test/", "tok", session=session)
+        with self.assertRaises(CloudRejected):
+            client.upload_unmatched("SER-1", "1", "2026-10-10T08:00:00+05:00", b"jpg")

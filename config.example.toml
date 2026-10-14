@@ -15,3 +15,5 @@ ip = "192.168.43.65"
 username = "admin"
 password = "CHANGE-ME"
 direction = "IN"
+# Optional label for the operator ("Asosiy kirish"); the bridge ignores it.
+location_label = "Asosiy kirish"

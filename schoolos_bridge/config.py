@@ -48,6 +48,12 @@ class DeviceConfig:
     username: str
     password: str
     direction: str = "IN"
+    #: Human label ("Asosiy kirish") written by the setup wizard; the bridge
+    #: itself does not use it — it is for the operator reading the config.
+    location_label: str = ""
+    #: Terminal model as the wizard's probe read it; reported to the cloud so a
+    #: terminal registered from the bridge still shows what it is.
+    model: str = ""
 
 
 @dataclass(frozen=True)
