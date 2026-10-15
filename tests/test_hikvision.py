@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from schoolos_bridge.config import DeviceConfig
-from schoolos_bridge.drivers import DriverError, Person, TerminalPerson
+from schoolos_bridge.drivers import DriverError, Person, TerminalPerson, hikvision
 from schoolos_bridge.drivers.hikvision import HikvisionDriver
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -313,3 +313,29 @@ class HikvisionPersonsAndTimeTests(unittest.TestCase):
     def test_set_timezone_rejects_bad_posix(self):
         with self.assertRaises(DriverError):
             self.driver.set_timezone("Asia/Tashkent")
+
+
+class SchoolTimezoneTests(unittest.TestCase):
+    @staticmethod
+    def _offset(tz):
+        from datetime import datetime
+
+        # tzinfo.utcoffset() needs a concrete datetime; a bare None is not enough.
+        return datetime(2026, 1, 1, 12, 0, tzinfo=tz).utcoffset()
+
+    def test_school_tz_is_utc_plus_five(self):
+        from datetime import timedelta
+
+        self.assertEqual(self._offset(hikvision.SCHOOL_TZ), timedelta(hours=5))
+
+    def test_school_tz_falls_back_when_the_tz_database_is_missing(self):
+        from datetime import timedelta
+        from zoneinfo import ZoneInfoNotFoundError
+
+        # A frozen Windows build may carry neither the system tz database nor
+        # the pip `tzdata` package; the driver must still import, on UTC+5.
+        with mock.patch.object(
+            hikvision, "ZoneInfo", side_effect=ZoneInfoNotFoundError("missing")
+        ):
+            fallback = hikvision._school_tz()
+        self.assertEqual(self._offset(fallback), timedelta(hours=5))

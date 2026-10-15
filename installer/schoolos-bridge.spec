@@ -16,6 +16,7 @@ the ``tomli`` TOML reader is added explicitly: the source imports it only inside
 a ``try/except``, which PyInstaller's static analysis cannot see through.
 """
 
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -24,6 +25,17 @@ STATIC = ROOT / "schoolos_bridge" / "setup" / "static"
 
 datas = [(str(STATIC), "schoolos_bridge/setup/static")]
 hiddenimports = ["tomli"] if sys.version_info < (3, 11) else []
+
+# Windows has no system IANA time-zone database, so the frozen bridge resolves
+# `zoneinfo.ZoneInfo("Asia/Tashkent")` (drivers/hikvision.py) through the pip
+# `tzdata` package that requirements-build.txt installs there. Pull its data in
+# explicitly instead of trusting hooks-contrib's `hook-zoneinfo` to notice.
+# Linux/macOS read the OS database and skip this.
+if importlib.util.find_spec("tzdata") is not None:
+    from PyInstaller.utils.hooks import collect_data_files
+
+    datas += collect_data_files("tzdata")
+    hiddenimports += ["tzdata"]
 
 # Small console tools: drop the GUI and doc/test scaffolding they never use.
 excludes = ["tkinter", "pydoc", "doctest", "test"]

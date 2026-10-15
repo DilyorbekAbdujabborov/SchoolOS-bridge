@@ -46,6 +46,15 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("pyinstaller", text)
         self.assertIn("-r requirements.txt", text)
 
+    def test_build_requirements_ship_tzdata_for_windows(self):
+        # The frozen Windows binary has no system tz database; without `tzdata`
+        # the Hikvision driver import — and so the whole bridge — dies on
+        # "No time zone found with key Asia/Tashkent".
+        text = (BRIDGE / "requirements-build.txt").read_text().lower()
+        self.assertIn("tzdata", text)
+        spec = (INSTALLER / "schoolos-bridge.spec").read_text()
+        self.assertIn("tzdata", spec)
+
     def test_service_file_per_platform_exists(self):
         deploy = BRIDGE / "deploy"
         for name in (

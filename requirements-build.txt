@@ -11,3 +11,9 @@ pyinstaller>=6.6,<7
 # interpreter is that old, PyInstaller only sees it behind a try/except, so the
 # spec adds it as an explicit hidden import.
 tomli>=2.0; python_version < "3.11"
+
+# The Hikvision driver resolves "Asia/Tashkent" with zoneinfo. Linux and macOS
+# read the system IANA database, but Windows has none, so the frozen binary
+# needs the pip `tzdata` package — without it the setup wizard's device probe
+# dies with "No time zone found with key Asia/Tashkent". The spec collects it.
+tzdata>=2024.1; sys_platform == "win32"

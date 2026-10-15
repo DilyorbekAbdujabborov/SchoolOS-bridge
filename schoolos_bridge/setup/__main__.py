@@ -51,11 +51,18 @@ def _banner(host, port, pin, config_path, auth):
 
 
 def _self_test() -> int:
-    """Prove the wizard's web assets made it into the build (a frozen app has
-    them inside its own bundle, not next to the package on disk)."""
+    """Prove the wizard's web assets and the device drivers made it into the
+    build (a frozen app has them inside its own bundle, not next to the package
+    on disk). The driver import is what a Windows onefile build silently loses
+    when a runtime dependency — the IANA tz database, say — is not bundled."""
     missing = [name for name in REQUIRED_ASSETS if not (STATIC_DIR / name).is_file()]
     if missing:
         print(f"self-test FAIL: yetishmayotgan fayllar: {', '.join(missing)} ({STATIC_DIR})", file=sys.stderr)
+        return 1
+    try:
+        from ..drivers import hikvision  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 - a broken frozen build must fail here, not at runtime
+        print(f"self-test FAIL: driver import: {exc}", file=sys.stderr)
         return 1
     print(f"self-test OK: {STATIC_DIR}")
     return 0

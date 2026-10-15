@@ -11,10 +11,10 @@ Verified on a DS-K1T343MFWX, firmware V4.38.0:
 
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from email import message_from_bytes
 from email.policy import default as email_policy
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from requests.auth import HTTPDigestAuth
@@ -29,7 +29,24 @@ from .base import (
     TerminalPerson,
 )
 
-SCHOOL_TZ = ZoneInfo("Asia/Tashkent")
+
+def _school_tz() -> tzinfo:
+    """UTC+5 for the school's wall clock ("Asia/Tashkent").
+
+    Prefer the IANA database so a future offset change is picked up, but a
+    frozen Windows build ships no system tz database and may not bundle the pip
+    `tzdata` package — importing this driver would then die with "No time zone
+    found with key Asia/Tashkent" and take the whole service down
+    (`build_driver` imports us at runtime). Uzbekistan has been a fixed UTC+5,
+    with no DST, since 1991, so the literal offset is exact.
+    """
+    try:
+        return ZoneInfo("Asia/Tashkent")
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=5))
+
+
+SCHOOL_TZ = _school_tz()
 #: POSIX zone string for UTC+5 (the sign is inverted in POSIX notation).
 SCHOOL_POSIX_TZ = "CST-5:00:00"
 MAX_CLOCK_DRIFT = timedelta(seconds=60)
