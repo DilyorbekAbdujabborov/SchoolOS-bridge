@@ -11,6 +11,7 @@ import json
 import logging
 import mimetypes
 import socket
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -22,7 +23,23 @@ from . import discovery, store
 
 log = logging.getLogger("schoolos_bridge.setup")
 
-STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+def _static_dir() -> Path:
+    """Where the wizard's web files live.
+
+    From source that is the package directory. In a PyInstaller build the code
+    lives inside the temporary ``_MEIPASS`` directory and the files are bundled
+    next to it, so prefer that copy when present.
+    """
+    bundle = getattr(sys, "_MEIPASS", None)
+    if bundle:
+        frozen = Path(bundle) / "schoolos_bridge" / "setup" / "static"
+        if frozen.is_dir():
+            return frozen
+    return Path(__file__).resolve().parent / "static"
+
+
+STATIC_DIR = _static_dir()
 MAX_BODY = 1 << 20  # 1 MiB is ample for the wizard's payloads
 
 

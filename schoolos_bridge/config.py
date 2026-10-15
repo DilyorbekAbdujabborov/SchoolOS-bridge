@@ -23,11 +23,30 @@ def _windows_home() -> Path:
     return Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "SchoolOS Bridge"
 
 
+def _macos_home() -> Path:
+    # A per-user location: unlike Linux (which installs under /etc as root),
+    # macOS runs the bridge from a normal account, and ~/Library is writable
+    # without sudo. A LaunchDaemon that sets SCHOOLOS_BRIDGE_CONFIG can point
+    # somewhere else.
+    return Path.home() / "Library" / "Application Support" / "SchoolOS Bridge"
+
+
+def _default_dir() -> Path:
+    """The per-OS directory holding config.toml and state.json by default."""
+    if sys.platform == "win32":
+        return _windows_home()
+    if sys.platform == "darwin":
+        return _macos_home()
+    return Path("/var/lib/schoolos-bridge")
+
+
 def default_config_path() -> Path:
     if os.environ.get(ENV_CONFIG):
         return Path(os.environ[ENV_CONFIG])
     if sys.platform == "win32":
         return _windows_home() / "config.toml"
+    if sys.platform == "darwin":
+        return _macos_home() / "config.toml"
     path = Path("/etc/schoolos-bridge/config.toml")
     if not path.exists() and LEGACY_POSIX_CONFIG.exists():
         return LEGACY_POSIX_CONFIG
@@ -35,9 +54,7 @@ def default_config_path() -> Path:
 
 
 def default_state_path() -> Path:
-    if sys.platform == "win32":
-        return _windows_home() / "state.json"
-    return Path("/var/lib/schoolos-bridge/state.json")
+    return _default_dir() / "state.json"
 
 
 @dataclass(frozen=True)

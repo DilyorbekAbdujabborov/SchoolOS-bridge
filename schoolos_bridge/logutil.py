@@ -6,8 +6,11 @@ purpose, but an exception text could echo one (a URL, a server reply), so a
 filter masks every configured secret before a record is written."""
 
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 MASK = "***"
+FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
 class RedactSecrets(logging.Filter):
@@ -35,8 +38,20 @@ class RedactSecrets(logging.Filter):
         return True
 
 
-def setup_logging(level=logging.INFO, secrets=()) -> None:
-    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+def setup_logging(level=logging.INFO, secrets=(), log_file=None) -> None:
+    """Send logs to stderr and, when given, to a rotating file.
+
+    A service manager collects stderr on its own (journald, launchd, WinSW); the
+    file is for the Windows scheduled-task and by-hand installs that keep no
+    history. Either way the secret filter is applied to every handler."""
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_file:
+        path = Path(log_file).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            RotatingFileHandler(path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        )
+    logging.basicConfig(level=level, format=FORMAT, handlers=handlers, force=True)
     redact = RedactSecrets(secrets)
     for handler in logging.getLogger().handlers:
         handler.addFilter(redact)

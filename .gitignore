@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 config.toml
 state.json
+
+# PyInstaller output (installer/build.py)
+build/
+dist/

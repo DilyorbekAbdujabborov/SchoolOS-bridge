@@ -6,6 +6,7 @@ before anything is sent to the browser.
 """
 
 import os
+import sys
 from pathlib import Path
 
 try:
@@ -14,6 +15,11 @@ except ModuleNotFoundError:  # Python 3.10 (Ubuntu 22.04)
     import tomli as tomllib
 
 from .tomlwrite import DEVICE_KEYS, TOP_KEYS, dumps
+
+#: POSIX ownership/permission bits. On Windows `os.chown` does not exist and the
+#: mode bits are mostly decorative — the installer's ACL is what protects the
+#: file — so every call below is skipped there instead of raising.
+POSIX = sys.platform != "win32"
 
 
 def read_config(path) -> dict:
@@ -42,7 +48,7 @@ def write_config(path, data: dict) -> None:
 
     tmp = file.with_name(file.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.chmod(tmp, 0o600)
+    _restrict(tmp)
     owner = _existing_owner(file)
     if owner is not None:
         try:
@@ -61,7 +67,20 @@ def write_config(path, data: dict) -> None:
             pass
 
 
+def _restrict(file: Path) -> None:
+    """Best-effort owner-only access. A path that refuses `chmod` must not fail
+    the write (some Windows/mounted filesystems do)."""
+    if not POSIX:
+        return
+    try:
+        os.chmod(file, 0o600)
+    except OSError:
+        pass
+
+
 def _existing_owner(file: Path):
+    if not POSIX:
+        return None
     try:
         stat = file.stat()
     except OSError:
@@ -72,7 +91,7 @@ def _existing_owner(file: Path):
 def _write_in_place(file: Path, text: str) -> None:
     with open(file, "w", encoding="utf-8") as handle:
         handle.write(text)
-    os.chmod(file, 0o600)
+    _restrict(file)
 
 
 def clean_device(raw: dict) -> dict:

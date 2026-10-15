@@ -1,0 +1,82 @@
+name: Bridge binaries
+
+# PyInstaller cannot cross-compile, so one job per OS produces that OS's
+# standalone executables. Run it manually to cut a release, or let it guard
+# every change so a broken spec never reaches main.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "schoolos_bridge/**"
+      - "installer/**"
+      - "requirements*.txt"
+      - ".github/workflows/bridge-build.yml"
+  pull_request:
+    paths:
+      - "schoolos_bridge/**"
+      - "installer/**"
+      - "requirements*.txt"
+      - ".github/workflows/bridge-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: schoolos-bridge-linux
+          - os: macos-latest
+            artifact: schoolos-bridge-macos
+          - os: windows-latest
+            artifact: schoolos-bridge-windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # PyInstaller's stable line; newer interpreters can lag behind it.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+
+      - name: Install build dependencies
+        run: pip install -r requirements-build.txt
+
+      - name: Build executables
+        run: python installer/build.py
+
+      - name: Smoke-test the frozen binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=""
+          if [ "${RUNNER_OS}" = "Windows" ]; then exe=".exe"; fi
+          ./dist/schoolos-bridge${exe} --version
+          ./dist/schoolos-bridge-setup${exe} --version
+          ./dist/schoolos-bridge-setup${exe} --self-test
+          ls -l dist/
+
+      - name: Upload executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          # Both names, both suffixes: exactly one of each pair exists.
+          path: |
+            dist/schoolos-bridge
+            dist/schoolos-bridge.exe
+            dist/schoolos-bridge-setup
+            dist/schoolos-bridge-setup.exe
+          if-no-files-found: error
+          retention-days: 14

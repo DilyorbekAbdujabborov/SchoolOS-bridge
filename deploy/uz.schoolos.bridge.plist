@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchDaemon for the bridge. Installed by deploy/install-macos.sh into
+  /Library/LaunchDaemons/uz.schoolos.bridge.plist. Runs the built executable at
+  boot as root and restarts it if it ever exits.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>uz.schoolos.bridge</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/schoolos-bridge</string>
+        <string>--config</string>
+        <string>/usr/local/etc/schoolos-bridge/config.toml</string>
+        <string>--log-file</string>
+        <string>/usr/local/var/log/schoolos-bridge.log</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/schoolos-bridge.err.log</string>
+</dict>
+</plist>

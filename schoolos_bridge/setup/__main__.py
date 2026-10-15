@@ -1,22 +1,28 @@
-"""Start the bridge's local setup wizard.
-
-    python -m schoolos_bridge.setup                 # config at the install path
-    python -m schoolos_bridge.setup --config ./config.toml --port 8098
+"""python -m schoolos_bridge.setup --config ./config.toml --port 8098
 
 Open the printed URL from a browser on the same network. The wizard never shows
 the config file's secrets back to the browser and refuses `/api/*` calls without
 the printed PIN (unless `--no-auth` is given, for a trusted local machine).
+
+On an installed bridge this is the `schoolos-bridge-setup` executable (or, from
+source, `deploy/schoolos-bridge-setup`); `--self-test` just checks the build is
+intact and exits.
 """
 
 import argparse
 import logging
 import secrets
+import sys
 
+from .. import __version__
 from ..config import default_config_path
+from ..logutil import setup_logging
 from . import discovery
-from .server import make_server
+from .server import STATIC_DIR, make_server
 
 log = logging.getLogger("schoolos_bridge.setup")
+
+REQUIRED_ASSETS = ("index.html", "app.js", "style.css")
 
 
 def _banner(host, port, pin, config_path, auth):
@@ -44,6 +50,17 @@ def _banner(host, port, pin, config_path, auth):
     print("\n".join(lines), flush=True)
 
 
+def _self_test() -> int:
+    """Prove the wizard's web assets made it into the build (a frozen app has
+    them inside its own bundle, not next to the package on disk)."""
+    missing = [name for name in REQUIRED_ASSETS if not (STATIC_DIR / name).is_file()]
+    if missing:
+        print(f"self-test FAIL: yetishmayotgan fayllar: {', '.join(missing)} ({STATIC_DIR})", file=sys.stderr)
+        return 1
+    print(f"self-test OK: {STATIC_DIR}")
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="schoolos_bridge.setup", description="Bridge setup wizard")
     parser.add_argument("--config", default=str(default_config_path()))
@@ -55,9 +72,17 @@ def main() -> None:
         "--scan-timeout", type=float, default=discovery.DEFAULT_SWEEP_TIMEOUT,
         help="seconds to wait for each host while sweeping",
     )
+    parser.add_argument(
+        "--self-test", action="store_true",
+        help="check that the bundled web assets are present, then exit",
+    )
+    parser.add_argument("--version", action="version", version=f"schoolos-bridge-setup {__version__}")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if args.self_test:
+        raise SystemExit(_self_test())
+
+    setup_logging()
     pin = "" if args.no_auth else (args.pin or f"{secrets.randbelow(1_000_000):06d}")
 
     server = make_server(args.config, args.host, args.port, pin=pin, scan_timeout=args.scan_timeout)

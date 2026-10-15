@@ -63,6 +63,9 @@ never leave the machine, and the browser never sees the saved ones back.
 ```bash
 # from the bridge/ directory (or /opt/schoolos-bridge on an installed bridge)
 sudo ./deploy/schoolos-bridge-setup
+
+# packaged app: run the built wizard directly
+./dist/schoolos-bridge-setup          # dist\schoolos-bridge-setup.exe on Windows
 ```
 
 It prints a URL and a one-time **PIN**; open the URL from any device on the same
@@ -83,6 +86,50 @@ Flags: `--port` (default 8098), `--host` (default `0.0.0.0`), `--pin` (fix the
 PIN), `--no-auth` (trusted machine only), `--scan-timeout`. Restart the service
 afterwards: `sudo systemctl restart schoolos-bridge`.
 
+## Standalone app (no Python needed)
+
+The bridge packages as two self-contained executables — the service
+(`schoolos-bridge`) and the setup wizard (`schoolos-bridge-setup`) — so a school
+machine does not need Python installed.
+
+```bash
+cd bridge
+python -m venv .build-venv && . .build-venv/bin/activate   # Windows: .build-venv\Scripts\activate
+pip install -r requirements-build.txt
+python installer/build.py            # writes dist/schoolos-bridge and dist/schoolos-bridge-setup
+```
+
+PyInstaller cannot cross-compile: build on the OS you ship to. CI does all three
+(`.github/workflows/bridge-build.yml`) and uploads one artifact per OS, so a
+release can just take those.
+
+Run it by hand — the service, then the wizard to write the config:
+
+| OS | Service | Setup wizard |
+| --- | --- | --- |
+| Linux | `./dist/schoolos-bridge --config /etc/schoolos-bridge/config.toml` | `./dist/schoolos-bridge-setup` |
+| macOS | `./dist/schoolos-bridge --config ~/Library/Application\ Support/SchoolOS\ Bridge/config.toml` | `./dist/schoolos-bridge-setup` |
+| Windows | `dist\schoolos-bridge.exe --config "%ProgramData%\SchoolOS Bridge\config.toml" --log-file "dist\bridge.log"` | `dist\schoolos-bridge-setup.exe` |
+
+Without `--config` each platform reads its own default: `/etc/schoolos-bridge/`
+(Linux), `~/Library/Application Support/SchoolOS Bridge/` (macOS),
+`%ProgramData%\SchoolOS Bridge` (Windows). `SCHOOLOS_BRIDGE_CONFIG` overrides it.
+`--version` prints the build; `schoolos-bridge-setup --self-test` checks that the
+bundled web assets are intact.
+
+### Install as a service
+
+- **Linux (systemd):** the block above (source install), or point the unit at
+  the built binary (`ExecStart=/opt/schoolos-bridge/schoolos-bridge --config ...`).
+- **macOS (launchd):** `sudo deploy/install-macos.sh` copies the executables to
+  `/usr/local/bin`, seeds the config in `/usr/local/etc/schoolos-bridge`, and
+  loads `uz.schoolos.bridge`. Logs: `/usr/local/var/log/schoolos-bridge.log`.
+- **Windows:** in an *elevated* PowerShell, `.\deploy\install-windows.ps1`
+  installs under `%ProgramData%\SchoolOS Bridge` and registers a startup task
+  that restarts on failure (`--Uninstall` removes it). Logs:
+  `%ProgramData%\SchoolOS Bridge\logs\schoolos-bridge.log`. A console program
+  cannot be a real SCM service — for a classic one, wrap the exe with WinSW/NSSM.
+
 ## Terminal setup (Hikvision)
 
 - Time: the bridge sets the zone to UTC+5 on start (`CST-5:00:00`).
@@ -96,4 +143,7 @@ afterwards: `sudo systemctl restart schoolos-bridge`.
 python -m unittest            # from bridge/
 python -m schoolos_bridge --config config.toml --once
 python -m schoolos_bridge.setup --config config.toml --port 8098   # setup wizard
+python -m schoolos_bridge.setup --self-test                        # bundled assets present?
+
+python installer/build.py     # build the standalone executables into dist/
 ```

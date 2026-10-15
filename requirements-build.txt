@@ -1,0 +1,13 @@
+# Build-only dependencies for the standalone executables.
+#
+# The bridge itself runs on the standard library + requests (requirements.txt);
+# nothing here is needed at runtime. PyInstaller cannot cross-compile, so build
+# on each target OS (Linux/macOS/Windows) - the CI workflow does exactly that.
+-r requirements.txt
+
+pyinstaller>=6.6,<7
+
+# Python < 3.11 has no tomllib; config.py falls back to tomli. When the build
+# interpreter is that old, PyInstaller only sees it behind a try/except, so the
+# spec adds it as an explicit hidden import.
+tomli>=2.0; python_version < "3.11"
