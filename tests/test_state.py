@@ -1,3 +1,4 @@
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,6 +26,23 @@ class StateTests(unittest.TestCase):
         self.assertEqual(again.cursor("S1"), 128303)
         self.assertEqual(again.since("S1"), "2026-10-10T08:57:36+05:00")
         self.assertEqual(again.outbox, [{"osid": "1"}])
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission bits")
+    def test_state_file_is_owner_only(self):
+        state = State(self.path)
+        state.outbox.append({"osid": "1"})
+        state.save()
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX permission bits")
+    def test_rewrite_keeps_state_file_owner_only(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("{}")
+        self.path.chmod(0o644)
+        state = State(self.path)
+        state.outbox.append({"osid": "1"})
+        state.save()
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
 
 class FaceVersionStateTests(unittest.TestCase):

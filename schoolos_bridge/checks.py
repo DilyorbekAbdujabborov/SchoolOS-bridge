@@ -41,6 +41,28 @@ def _check_permissions(path: Path) -> Result:
     return Result(PASS, name, oct(mode))
 
 
+def _check_state_permissions(path) -> Result:
+    """The state file holds the outbox (attendance events + student OSIDs)."""
+    name = "State fayl huquqlari / State permissions"
+    if sys.platform == "win32":
+        return Result(PASS, name, "Windows: ACL o'rnatuvchi tomonidan cheklangan")
+    try:
+        state = Path(path) if path else None
+    except TypeError:  # pragma: no cover - defensive
+        state = None
+    if state is None:
+        return Result(PASS, name, "sozlanmagan")
+    try:
+        if not state.exists():
+            return Result(PASS, name, "hali yaratilmagan (xizmat yozganda 600 bo'ladi)")
+        mode = state.stat().st_mode & 0o777
+    except OSError:  # pragma: no cover - unreadable path
+        return Result(WARN, name, f"tekshirib bo'lmadi: {state}")
+    if mode & 0o077:
+        return Result(WARN, name, f"{oct(mode)} — boshqalar o'qiy oladi. Tuzatish: sudo chmod 600 {state}")
+    return Result(PASS, name, oct(mode))
+
+
 def _check_cloud_url(url: str) -> Result:
     name = "Bulut manzili / Cloud URL"
     parsed = urlparse(url)
@@ -136,7 +158,12 @@ def run_checks(path, cloud_client=None, drivers=None) -> list[Result]:
         config = load_config(path)
     except (OSError, ValueError) as exc:
         return [Result(FAIL, "Sozlama / Config", f"{path}: {exc}")]
-    results = [Result(PASS, "Sozlama / Config", str(path)), _check_permissions(path)]
+    results = [
+        Result(PASS, "Sozlama / Config", str(path)),
+        _check_permissions(path),
+        _check_state_permissions(config.state_file),
+    ]
+
     url = _check_cloud_url(config.cloud_url)
     results.append(url)
     results.append(check_cloud(config, cloud_client) if url.status != FAIL else

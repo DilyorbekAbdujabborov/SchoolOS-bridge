@@ -1,4 +1,5 @@
 import json
+import socket
 import tempfile
 import threading
 import unittest
@@ -439,3 +440,42 @@ class ListenerTests(unittest.TestCase):
         )
         self.assertEqual(urllib.request.urlopen(request, timeout=5).status, 200)
         self.assertEqual([e["event"]["raw"]["serialNo"] for e in bridge.state.outbox], [77])
+
+    def _serve(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        config = Config(
+            cloud_url="https://c", token="t", state_file=Path(tmp.name) / "state.json",
+            devices=[DeviceConfig(SERIAL, "hikvision", "127.0.0.1", "admin", "pw", "IN")],
+        )
+        bridge = Bridge(config, FakeCloud(), {SERIAL: FakeDriver()}, State(config.state_file))
+        server = make_server(bridge, "127.0.0.1", 0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        return bridge, server.server_address[1]
+
+    def test_negative_content_length_does_not_hang(self):
+        # `rfile.read(-1)` would block until the client hangs up; a stray negative
+        # header must be treated as an empty body instead.
+        bridge, port = self._serve()
+        sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+        self.addCleanup(sock.close)
+        sock.sendall(b"POST /push HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\nConnection: close\r\n\r\n")
+        self.assertIn(b"200", sock.recv(4096))
+        self.assertEqual(bridge.state.outbox, [])
+
+    def test_oversized_body_is_bounded_and_connection_closed(self):
+        import schoolos_bridge.listener as listener
+
+        original = listener.MAX_BODY
+        listener.MAX_BODY = 16
+        self.addCleanup(setattr, listener, "MAX_BODY", original)
+        bridge, port = self._serve()
+        sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+        self.addCleanup(sock.close)
+        # Claim 100 bytes, send exactly that: only MAX_BODY is consumed and the
+        # connection is closed so the surplus cannot be read as a new request.
+        sock.sendall(b"POST /push HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n" + b"x" * 100)
+        self.assertIn(b"200", sock.recv(4096))
+        self.assertEqual(sock.recv(4096), b"")

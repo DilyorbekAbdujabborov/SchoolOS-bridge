@@ -3,7 +3,13 @@ the cloud. Written atomically so a crash never leaves half a file."""
 
 import json
 import os
+import sys
 from pathlib import Path
+
+#: POSIX ownership/permission bits. Windows protects the file with the
+#: installer's ACL instead (`os.chmod` there only toggles the read-only bit), so
+#: the tightening below is skipped there rather than faking it.
+POSIX = sys.platform != "win32"
 
 
 class State:
@@ -42,4 +48,11 @@ class State:
         tmp.write_text(json.dumps({
             "cursors": self._cursors, "since": self._since, "outbox": self.outbox, "faces": self._faces,
         }))
+        if POSIX:
+            # The outbox carries attendance events and student OSIDs; keep it out
+            # of reach of other local accounts, matching the config file.
+            try:
+                tmp.chmod(0o600)
+            except OSError:  # pragma: no cover - exotic filesystems
+                pass
         os.replace(tmp, self.path)

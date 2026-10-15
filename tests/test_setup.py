@@ -303,6 +303,33 @@ class ServerTests(unittest.TestCase):
         status, _ = self.call("GET", "/api/state", pin="000000")
         self.assertEqual(status, 401)
 
+    def test_responses_carry_hardening_headers(self):
+        request = urllib.request.Request(f"http://127.0.0.1:{self.port}/")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            headers = response.headers
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(headers["X-Frame-Options"], "DENY")
+        self.assertIn("default-src 'none'", headers["Content-Security-Policy"])
+
+    def test_wrong_pin_is_rate_limited(self):
+        from schoolos_bridge.setup import server as server_module
+
+        for _ in range(server_module.PIN_MAX_FAILURES):
+            status, _ = self.call("GET", "/api/state", pin="999999")
+            self.assertEqual(status, 401)
+        # The budget is spent: even the *correct* PIN is refused until it clears.
+        status, body = self.call("GET", "/api/state")
+        self.assertEqual(status, 429)
+        self.assertEqual(json.loads(body)["error"], "too_many_requests")
+
+    def test_unknown_endpoint_is_not_enumerable_without_pin(self):
+        # An unauthenticated peer must not learn which paths exist (401 for all,
+        # never 404 for some).
+        status, _ = self.call("POST", "/api/does-not-exist", {}, pin=None)
+        self.assertEqual(status, 401)
+        status, _ = self.call("POST", "/api/does-not-exist", {})
+        self.assertEqual(status, 404)
+
     def test_state_returns_public_config(self):
         status, body = self.call("GET", "/api/state")
         self.assertEqual(status, 200)

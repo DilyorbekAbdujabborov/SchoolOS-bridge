@@ -12,6 +12,8 @@ import logging
 import mimetypes
 import socket
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -41,6 +43,28 @@ def _static_dir() -> Path:
 
 STATIC_DIR = _static_dir()
 MAX_BODY = 1 << 20  # 1 MiB is ample for the wizard's payloads
+#: A browser that opens a socket and stalls must not pin a worker thread.
+SOCKET_TIMEOUT = 30
+#: Wrong-PIN attempts allowed from one address before it is answered 429. The
+#: wizard prints a 6-digit PIN, so an unthrottled LAN peer could brute-force it.
+PIN_MAX_FAILURES = 10
+PIN_LOCKOUT_SECONDS = 60
+
+#: Sent with every response. The wizard ships no inline script/style and never
+#: talks to any host but itself, so a strict policy costs nothing and turns a
+#: would-be XSS into a non-event. `nosniff` keeps a mistyped content type from
+#: being re-interpreted as script.
+SECURITY_HEADERS = (
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "no-referrer"),
+    (
+        "Content-Security-Policy",
+        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "connect-src 'self'; img-src 'self' data:; base-uri 'none'; "
+        "form-action 'none'; frame-ancestors 'none'",
+    ),
+)
 
 
 def register_devices(cloud_url, token, devices, client=None):
@@ -90,9 +114,31 @@ class SetupServer(ThreadingHTTPServer):
         self.config_path = str(config_path) if config_path else ""
         self.pin = pin or ""
         self.scan_timeout = scan_timeout
+        #: client address -> recent wrong-PIN timestamps (monotonic seconds).
+        self._pin_failures: dict[str, list[float]] = {}
+        self._pin_lock = threading.Lock()
+
+    def _prune(self, host: str, now: float) -> list[float]:
+        cutoff = now - PIN_LOCKOUT_SECONDS
+        recent = [t for t in self._pin_failures.get(host, ()) if t > cutoff]
+        self._pin_failures[host] = recent
+        return recent
+
+    def pin_locked(self, host: str) -> bool:
+        """True when `host` has burned its wrong-PIN budget recently."""
+        if not self.pin:
+            return False  # --no-auth: nothing to guess
+        with self._pin_lock:
+            return len(self._prune(host, time.monotonic())) >= PIN_MAX_FAILURES
+
+    def record_pin_failure(self, host: str) -> None:
+        with self._pin_lock:
+            self._prune(host, time.monotonic()).append(time.monotonic())
 
 
 class _Handler(BaseHTTPRequestHandler):
+    timeout = SOCKET_TIMEOUT
+
     server_version = "SchoolOSBridgeSetup/1.0"
     protocol_version = "HTTP/1.1"
 
@@ -100,12 +146,17 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log.debug("%s " + fmt, self.address_string(), *args)
 
+    def _security_headers(self):
+        for name, value in SECURITY_HEADERS:
+            self.send_header(name, value)
+
     def _json(self, status, payload):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -113,8 +164,17 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(status, {"ok": False, "error": code, "message": message})
 
     def _body(self) -> dict:
-        length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0 or length > MAX_BODY:
+        raw_length = self.headers.get("Content-Length") or "0"
+        try:
+            length = int(raw_length)
+        except ValueError:
+            return {}
+        if length <= 0:
+            return {}
+        if length > MAX_BODY:
+            # Refuse the oversized payload and hang up: the unread remainder
+            # would otherwise be parsed as the next request on this connection.
+            self.close_connection = True
             return {}
         raw = self.rfile.read(length)
         try:
@@ -147,6 +207,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -186,6 +247,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _route_post(self):
         path = urlparse(self.path).path
+        # Authenticate before looking up the route: an unauthorised peer must not
+        # be able to map which endpoints exist by reading 401 vs 404.
+        if not self._guard():
+            return
         routes = {
             "/api/scan": self._scan,
             "/api/probe": self._probe,
@@ -198,12 +263,15 @@ class _Handler(BaseHTTPRequestHandler):
         if handler is None:
             self._error(404, "topilmadi", "not_found")
             return
-        if not self._guard():
-            return
         handler()
 
     def _guard(self) -> bool:
+        host = self.client_address[0]
+        if self.server.pin_locked(host):
+            self._error(429, "Juda ko'p urinish. Birozdan so'ng qayta urinib ko'ring.", "too_many_requests")
+            return False
         if not self._authorized():
+            self.server.record_pin_failure(host)
             self._error(401, "PIN noto'g'ri", "unauthorized")
             return False
         return True
@@ -232,7 +300,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(400, str(exc), "scan_too_large")
             return
         except Exception as exc:  # never 500 the wizard on a sweep hiccup
-            self._error(500, f"skaner xatosi: {exc}", "scan_failed")
+            log.exception("scan failed: %s", exc)
+            self._error(500, "skaner xatosi", "scan_failed")
             return
         known = {d.get("ip") for d in store.read_config(self.server.config_path).get("devices", [])}
         for row in found:
@@ -324,7 +393,8 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             results = run_checks(self.server.config_path)
         except Exception as exc:
-            self._error(500, f"tekshiruv xatosi: {exc}", "check_failed")
+            log.exception("checks failed: %s", exc)
+            self._error(500, "tekshiruv xatosi", "check_failed")
             return
         self._json(
             200,
