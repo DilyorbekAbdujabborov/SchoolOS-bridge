@@ -93,7 +93,6 @@ The bridge packages as two self-contained executables — the service
 machine does not need Python installed.
 
 ```bash
-cd bridge
 python -m venv .build-venv && . .build-venv/bin/activate   # Windows: .build-venv\Scripts\activate
 pip install -r requirements-build.txt
 python installer/build.py            # writes dist/schoolos-bridge and dist/schoolos-bridge-setup
