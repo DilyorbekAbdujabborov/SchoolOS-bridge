@@ -7,3 +7,6 @@ state.json
 # PyInstaller output (installer/build.py)
 build/
 dist/
+
+# The repo-wide "*.txt" ignore would swallow this build manifest.
+!requirements-build.txt

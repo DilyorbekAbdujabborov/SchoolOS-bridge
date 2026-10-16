@@ -30,10 +30,11 @@ def _run(*args):
 
 
 class PackagingTests(unittest.TestCase):
-    def test_spec_references_both_entry_points(self):
+    def test_spec_builds_one_program(self):
         spec = (INSTALLER / "schoolos-bridge.spec").read_text()
         self.assertIn("installer/entry_service.py", spec)
-        self.assertIn("installer/entry_setup.py", spec)
+        self.assertNotIn("entry_setup", spec)
+        self.assertNotIn("schoolos-bridge-setup", spec)
 
     def test_spec_bundles_the_wizard_web_assets(self):
         spec = (INSTALLER / "schoolos-bridge.spec").read_text()
@@ -78,10 +79,16 @@ class CommandLineTests(unittest.TestCase):
         self.assertIn("--config", done.stdout)
         self.assertIn("--log-file", done.stdout)
 
-    def test_setup_self_test_finds_the_web_assets(self):
-        done = _run("schoolos_bridge.setup", "--self-test")
+    def test_self_test_finds_assets_and_vault(self):
+        done = _run("schoolos_bridge", "--self-test")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("self-test OK", done.stdout)
+        self.assertIn("Fernet", done.stdout)
+
+    def test_help_lists_the_commands(self):
+        done = _run("schoolos_bridge", "--help")
+        for word in ("run", "open", "install", "--ui-host"):
+            self.assertIn(word, done.stdout)
 
 
 class DefaultPathTests(unittest.TestCase):

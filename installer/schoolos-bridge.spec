@@ -1,15 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec: the bridge as two standalone executables.
+"""PyInstaller spec: the bridge as one standalone executable.
 
     cd bridge
     pyinstaller --noconfirm --clean installer/schoolos-bridge.spec
 
-Produces, in ``dist/`` (``.exe`` on Windows):
-
-* ``schoolos-bridge``        - the long-running service;
-* ``schoolos-bridge-setup``  - the LAN setup wizard.
-
-Each is a single file that needs no Python installed. The wizard's web assets
+Produces ``dist/schoolos-bridge`` (``.exe`` on Windows): the relay, the
+terminal listener and the setup page in one file that needs no Python installed
+(double-clicked on Windows it installs itself — see ``schoolos_bridge.winsvc``). The wizard's web assets
 are bundled under ``schoolos_bridge/setup/static`` so ``server.STATIC_DIR``
 resolves inside the unpacked ``_MEIPASS`` directory at runtime. On Python < 3.11
 the ``tomli`` TOML reader is added explicitly: the source imports it only inside
@@ -78,4 +75,3 @@ def build(entry: str, name: str):
 
 
 build("installer/entry_service.py", "schoolos-bridge")
-build("installer/entry_setup.py", "schoolos-bridge-setup")

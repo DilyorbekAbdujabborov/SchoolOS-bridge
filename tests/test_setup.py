@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from schoolos_bridge.setup import discovery, store, tomlwrite
+from schoolos_bridge.setup.auth import issue_link
 from schoolos_bridge.setup.server import make_server, register_devices
 
 
@@ -64,6 +65,39 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         data = store.read_config(self.path)
         self.assertEqual(data["devices"][0]["serial"], "S")
+
+    def test_secrets_never_reach_the_file_in_clear(self):
+        store.write_config(
+            self.path,
+            {"cloud_url": "https://c", "token": "cloud-token-xyz", "devices": [{"serial": "S", "vendor": "hikvision", "ip": "1.2.3.4", "username": "admin", "password": "terminal-pass", "direction": "IN"}]},
+        )
+        text = self.path.read_text()
+        self.assertNotIn("cloud-token-xyz", text)
+        self.assertNotIn("terminal-pass", text)
+        self.assertIn("enc:v1:", text)
+        key = self.path.parent / "secret.key"
+        self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+        data = store.read_config(self.path)
+        self.assertEqual(data["token"], "cloud-token-xyz")
+        self.assertEqual(data["devices"][0]["password"], "terminal-pass")
+
+    def test_migrate_seals_a_clear_text_config(self):
+        self.path.write_text(
+            'cloud_url = "https://c"\ntoken = "old-token"\n\n[[devices]]\nserial = "S"\nvendor = "hikvision"\n'
+            'ip = "1.2.3.4"\nusername = "admin"\npassword = "old-pass"\ndirection = "IN"\n'
+        )
+        self.assertTrue(store.migrate(self.path))
+        self.assertNotIn("old-pass", self.path.read_text())
+        self.assertFalse(store.migrate(self.path))
+        self.assertEqual(store.read_config(self.path)["devices"][0]["password"], "old-pass")
+
+    def test_foreign_key_is_reported_not_crashed(self):
+        from schoolos_bridge.vault import VaultError
+
+        store.write_config(self.path, {"cloud_url": "https://c", "token": "t"})
+        (self.path.parent / "secret.key").write_bytes(b"x" * 44)
+        with self.assertRaises(VaultError):
+            store.read_config(self.path)
 
     def test_read_missing_is_empty(self):
         self.assertEqual(store.read_config(self.path), {})
@@ -246,16 +280,20 @@ class ProbeTests(unittest.TestCase):
 
 
 class ServerTests(unittest.TestCase):
-    PIN = "123456"
-
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.path = Path(self.tmp.name) / "config.toml"
-        self.server = make_server(str(self.path), "127.0.0.1", 0, pin=self.PIN)
+        self.server = make_server(str(self.path), "127.0.0.1", 0)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self._stop())
+        self.token = self.sign_in()
+
+    def sign_in(self):
+        status, body = self.call("POST", "/api/session", {"link": issue_link(self.path)}, token=None)
+        self.assertEqual(status, 200, body)
+        return json.loads(body)["token"]
 
     def _stop(self):
         def cleanup():
@@ -265,15 +303,17 @@ class ServerTests(unittest.TestCase):
 
         return cleanup
 
-    def call(self, method, path, body=None, pin=PIN):
+    def call(self, method, path, body=None, token=""):
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.port}{path}",
             method=method,
             data=json.dumps(body).encode() if body is not None else None,
             headers={"Content-Type": "application/json"},
         )
-        if pin is not None:
-            request.add_header("X-Setup-Pin", pin)
+        if token == "":
+            token = self.token
+        if token is not None:
+            request.add_header("Authorization", f"Bearer {token}")
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 return response.status, response.read()
@@ -284,24 +324,53 @@ class ServerTests(unittest.TestCase):
                 exc.close()
 
     def test_index_is_served(self):
-        status, body = self.call("GET", "/", pin=None)
+        status, body = self.call("GET", "/", token=None)
         self.assertEqual(status, 200)
         self.assertIn(b"SchoolOS", body)
 
     def test_asset_is_served(self):
-        status, body = self.call("GET", "/assets/app.js", pin=None)
+        status, body = self.call("GET", "/assets/app.js", token=None)
         self.assertEqual(status, 200)
         self.assertIn(b"function", body)
 
     def test_path_traversal_is_refused(self):
-        status, _ = self.call("GET", "/assets/../server.py", pin=None)
+        status, _ = self.call("GET", "/assets/../server.py", token=None)
         self.assertEqual(status, 404)
 
-    def test_api_requires_pin(self):
-        status, _ = self.call("GET", "/api/state", pin=None)
+    def test_api_requires_a_session(self):
+        status, _ = self.call("GET", "/api/state", token=None)
         self.assertEqual(status, 401)
-        status, _ = self.call("GET", "/api/state", pin="000000")
+        status, _ = self.call("GET", "/api/state", token="not.a.jwt")
         self.assertEqual(status, 401)
+
+    def test_link_works_once(self):
+        link = issue_link(self.path)
+        status, _ = self.call("POST", "/api/session", {"link": link}, token=None)
+        self.assertEqual(status, 200)
+        status, body = self.call("POST", "/api/session", {"link": link}, token=None)
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(body)["error"], "bad_link")
+
+    def test_forged_link_is_refused(self):
+        other = Path(self.tmp.name) / "elsewhere" / "config.toml"
+        status, _ = self.call("POST", "/api/session", {"link": issue_link(other)}, token=None)
+        self.assertEqual(status, 401)
+
+    def test_logout_ends_the_session(self):
+        status, _ = self.call("POST", "/api/logout", {})
+        self.assertEqual(status, 200)
+        status, _ = self.call("GET", "/api/state")
+        self.assertEqual(status, 401)
+
+    def test_device_delete_removes_from_config(self):
+        store.write_config(self.path, {"cloud_url": "https://c", "token": "t", "devices": [
+            {"serial": "A", "vendor": "hikvision", "ip": "1.1.1.1", "username": "admin", "password": "p", "direction": "IN"},
+            {"serial": "B", "vendor": "hikvision", "ip": "1.1.1.2", "username": "admin", "password": "p", "direction": "IN"},
+        ]})
+        status, body = self.call("POST", "/api/device-delete", {"serial": "A"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["deleted"], 1)
+        self.assertEqual([d["serial"] for d in store.read_config(self.path)["devices"]], ["B"])
 
     def test_responses_carry_hardening_headers(self):
         request = urllib.request.Request(f"http://127.0.0.1:{self.port}/")
@@ -311,21 +380,21 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(headers["X-Frame-Options"], "DENY")
         self.assertIn("default-src 'none'", headers["Content-Security-Policy"])
 
-    def test_wrong_pin_is_rate_limited(self):
+    def test_bad_tokens_are_rate_limited(self):
         from schoolos_bridge.setup import server as server_module
 
-        for _ in range(server_module.PIN_MAX_FAILURES):
-            status, _ = self.call("GET", "/api/state", pin="999999")
+        for _ in range(server_module.AUTH_MAX_FAILURES):
+            status, _ = self.call("GET", "/api/state", token="bad")
             self.assertEqual(status, 401)
-        # The budget is spent: even the *correct* PIN is refused until it clears.
+        # The budget is spent: even a *valid* session is refused until it clears.
         status, body = self.call("GET", "/api/state")
         self.assertEqual(status, 429)
         self.assertEqual(json.loads(body)["error"], "too_many_requests")
 
-    def test_unknown_endpoint_is_not_enumerable_without_pin(self):
+    def test_unknown_endpoint_is_not_enumerable_without_a_session(self):
         # An unauthenticated peer must not learn which paths exist (401 for all,
         # never 404 for some).
-        status, _ = self.call("POST", "/api/does-not-exist", {}, pin=None)
+        status, _ = self.call("POST", "/api/does-not-exist", {}, token=None)
         self.assertEqual(status, 401)
         status, _ = self.call("POST", "/api/does-not-exist", {})
         self.assertEqual(status, 404)
@@ -336,7 +405,8 @@ class ServerTests(unittest.TestCase):
         data = json.loads(body)
         self.assertEqual(data["config_path"], str(self.path))
         self.assertIn("default_subnet", data)
-        self.assertTrue(data["auth_required"])
+        self.assertIn("service", data)
+        self.assertIn(data["platform"], ("windows", "macos", "linux"))
 
     def test_scan_uses_discovery(self):
         with mock.patch.object(discovery, "scan", return_value=[{"ip": "192.168.1.64", "port": 80, "server": "", "status": 401}]) as scan:

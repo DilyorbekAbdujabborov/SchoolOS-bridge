@@ -6,6 +6,9 @@ purpose, but an exception text could echo one (a URL, a server reply), so a
 filter masks every configured secret before a record is written."""
 
 import logging
+import threading
+from collections import deque
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -38,6 +41,45 @@ class RedactSecrets(logging.Filter):
         return True
 
 
+class LogBuffer(logging.Handler):
+    """Keeps recent WARNING+ records until the service ships them to the cloud.
+
+    Bounded: if the cloud is unreachable the oldest lines fall off instead of
+    growing memory. Sits behind the same secret filter as every other handler."""
+
+    def __init__(self, maxlen=500):
+        super().__init__(level=logging.WARNING)
+        self._lines = deque(maxlen=maxlen)
+        self._guard = threading.Lock()
+
+    def emit(self, record):
+        text = record.getMessage()
+        if record.exc_text:
+            text += "\n" + record.exc_text.strip().splitlines()[-1]
+        elif record.exc_info:
+            text += "\n" + logging.Formatter().formatException(record.exc_info).splitlines()[-1]
+        item = {
+            "level": record.levelname,
+            "message": f"{record.name}: {text}"[:4000],
+            "logged_at": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+        }
+        with self._guard:
+            self._lines.append(item)
+
+    def take(self, limit=200):
+        """Remove and return up to `limit` oldest pending lines."""
+        with self._guard:
+            return [self._lines.popleft() for _ in range(min(limit, len(self._lines)))]
+
+    def restore(self, items):
+        """Put lines back (oldest first) after a failed upload."""
+        with self._guard:
+            self._lines.extendleft(reversed(items))
+
+
+LOG_BUFFER = LogBuffer()
+
+
 def setup_logging(level=logging.INFO, secrets=(), log_file=None) -> None:
     """Send logs to stderr and, when given, to a rotating file.
 
@@ -52,6 +94,18 @@ def setup_logging(level=logging.INFO, secrets=(), log_file=None) -> None:
             RotatingFileHandler(path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
         )
     logging.basicConfig(level=level, format=FORMAT, handlers=handlers, force=True)
+    root = logging.getLogger()
+    LOG_BUFFER.filters.clear()
+    root.addHandler(LOG_BUFFER)
     redact = RedactSecrets(secrets)
-    for handler in logging.getLogger().handlers:
+    for handler in root.handlers:
         handler.addFilter(redact)
+
+
+def set_secrets(secrets) -> None:
+    """Replace the masked values on every handler (the config was reloaded)."""
+    fresh = RedactSecrets(secrets).secrets
+    for handler in logging.getLogger().handlers:
+        for item in handler.filters:
+            if isinstance(item, RedactSecrets):
+                item.secrets = fresh

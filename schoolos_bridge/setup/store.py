@@ -1,8 +1,9 @@
 """Read and write the bridge config file for the setup UI.
 
-The file holds the terminal admin passwords (`chmod 600`), so writes are atomic
-and re-tighten permissions. Reading returns the raw dict; the UI masks secrets
-before anything is sent to the browser.
+Secrets (cloud token, terminal passwords) are sealed by `vault` on every write
+and opened on read, so callers work with plain values while the file on disk
+never holds them in clear. Writes are atomic and owner-only; the UI masks
+secrets before anything is sent to the browser.
 """
 
 import os
@@ -14,6 +15,8 @@ try:
 except ModuleNotFoundError:  # Python 3.10 (Ubuntu 22.04)
     import tomli as tomllib
 
+from ..config import normalize_cloud_url
+from ..vault import Vault, has_plaintext, open_config, seal_config
 from .tomlwrite import DEVICE_KEYS, TOP_KEYS, dumps
 
 #: POSIX ownership/permission bits. On Windows `os.chown` does not exist and the
@@ -22,8 +25,8 @@ from .tomlwrite import DEVICE_KEYS, TOP_KEYS, dumps
 POSIX = sys.platform != "win32"
 
 
-def read_config(path) -> dict:
-    """The config as a dict, or `{}` when the file does not exist yet."""
+def read_raw(path) -> dict:
+    """The config exactly as stored (secrets still sealed), or `{}`."""
     if not path:
         return {}
     file = Path(path)
@@ -31,6 +34,23 @@ def read_config(path) -> dict:
         return {}
     with open(file, "rb") as handle:
         return tomllib.load(handle)
+
+
+def read_config(path) -> dict:
+    """The config as a dict with secrets opened, or `{}` when the file does not
+    exist yet. Raises `vault.VaultError` when a sealed secret cannot be opened."""
+    data = read_raw(path)
+    return open_config(data, Vault.for_config(path)) if data else data
+
+
+def migrate(path) -> bool:
+    """Re-save a config that still holds clear-text secrets, sealed. Returns
+    True when the file was rewritten."""
+    data = read_raw(path)
+    if not data or not has_plaintext(data):
+        return False
+    write_config(path, open_config(data, Vault.for_config(path)))
+    return True
 
 
 def write_config(path, data: dict) -> None:
@@ -44,7 +64,7 @@ def write_config(path, data: dict) -> None:
     onto the new inode) and rewrite in place when we cannot."""
     file = Path(path)
     file.parent.mkdir(parents=True, exist_ok=True)
-    text = dumps(data)
+    text = dumps(seal_config(data, Vault.for_config(file)))
 
     tmp = file.with_name(file.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
@@ -100,8 +120,9 @@ def clean_device(raw: dict) -> dict:
 
 
 def public_config(path) -> dict:
-    """The config with secrets replaced by booleans, safe to send to the browser."""
-    data = read_config(path)
+    """The config with secrets replaced by booleans, safe to send to the browser.
+    Reads the sealed file: nothing here needs a secret opened."""
+    data = read_raw(path)
     devices = []
     for device in data.get("devices", []):
         row = {key: device.get(key, "") for key in DEVICE_KEYS if key != "password"}
@@ -110,7 +131,7 @@ def public_config(path) -> dict:
     return {
         "config_path": str(path) if path else "",
         "config_exists": bool(data),
-        "cloud_url": data.get("cloud_url", ""),
+        "cloud_url": normalize_cloud_url(data.get("cloud_url")),
         "token_set": bool(data.get("token")),
         "poll_seconds": data.get("poll_seconds", 2),
         "state_file": str(data.get("state_file", "")),
@@ -127,7 +148,7 @@ def merge_save(existing: dict, payload: dict) -> dict:
     the token, so it must not require the technician to retype it. Same for a
     device password left blank (the terminal is already configured).
     """
-    cloud_url = (payload.get("cloud_url") or "").strip()
+    cloud_url = normalize_cloud_url(payload.get("cloud_url") or existing.get("cloud_url"))
     token = (payload.get("token") or "").strip() or existing.get("token", "")
 
     devices = []

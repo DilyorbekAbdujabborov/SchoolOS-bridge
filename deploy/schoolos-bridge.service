@@ -8,12 +8,17 @@ Type=simple
 User=schoolos-bridge
 Group=schoolos-bridge
 WorkingDirectory=/opt/schoolos-bridge
-ExecStart=/opt/schoolos-bridge/venv/bin/python -m schoolos_bridge --config /etc/schoolos-bridge.toml
+# One process: relay, terminal listener and the setup page on 127.0.0.1:8098
+# (`sudo -u schoolos-bridge ... -m schoolos_bridge open --print` gives a sign-in
+# link; add `--ui-host 0.0.0.0` to reach the page from the LAN).
+ExecStart=/opt/schoolos-bridge/venv/bin/python -m schoolos_bridge run --config /etc/schoolos-bridge.toml
 Restart=always
 RestartSec=5
 StateDirectory=schoolos-bridge
 NoNewPrivileges=true
 ProtectSystem=strict
+# The setup page saves the config (and its key files) from inside the service.
+ReadWritePaths=-/etc/schoolos-bridge -/etc/schoolos-bridge.toml
 ProtectHome=true
 PrivateTmp=true
 

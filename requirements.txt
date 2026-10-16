@@ -1,1 +1,3 @@
 requests>=2.31
+# Seals the cloud token and terminal passwords in config.toml (vault.py).
+cryptography>=42

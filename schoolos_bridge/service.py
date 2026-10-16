@@ -14,13 +14,15 @@ import re
 import threading
 import time
 
-from .cloud import CloudError, CloudRejected
+from .cloud import CloudError, CloudRejected, explain
 from .drivers import DriverError, Person
+from .logutil import LOG_BUFFER
 
 log = logging.getLogger("schoolos_bridge")
 
 BATCH_SIZE = 500
 HEARTBEAT_EVERY = 60
+LOG_SHIP_EVERY = 30
 #: Outbox ceiling (≈ a few days of a big school). Past it the bridge stops
 #: pulling from the terminals instead of dropping anything: the terminal keeps
 #: its own history and the cursor resumes from the last event the cloud took.
@@ -48,6 +50,7 @@ class Bridge:
         self.clock = clock
         self.lock = threading.Lock()
         self._last_heartbeat = None
+        self._last_log_ship = None
         #: serial → last monotonic time an unknown-face shot was taken.
         self._last_unmatched: dict[str, float] = {}
 
@@ -293,7 +296,22 @@ class Bridge:
             self.cloud.heartbeat([self._device_report(d) for d in self.config.devices])
             self._last_heartbeat = now
         except CloudError as exc:
-            log.warning("heartbeat failed: %s", exc)
+            log.warning("heartbeat failed: %s — %s", exc, explain(exc, getattr(self.cloud, "base_url", ""))[1])
+
+    def _ship_logs(self) -> None:
+        """Upload pending WARNING+ lines so a director can read them in the cloud.
+        A failed upload puts them back; the buffer is bounded, so it can't grow."""
+        now = self.clock()
+        if self._last_log_ship is not None and now - self._last_log_ship < LOG_SHIP_EVERY:
+            return
+        lines = LOG_BUFFER.take()
+        if not lines:
+            return
+        self._last_log_ship = now
+        try:
+            self.cloud.push_logs(lines)
+        except CloudError:
+            LOG_BUFFER.restore(lines)
 
     @staticmethod
     def _device_report(device) -> dict:
@@ -313,3 +331,4 @@ class Bridge:
         self._flush()
         self._commands()
         self._heartbeat()
+        self._ship_logs()
