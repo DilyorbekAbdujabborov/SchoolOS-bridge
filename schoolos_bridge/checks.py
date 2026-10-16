@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .cloud import CloudClient, CloudError
+from .cloud import CloudClient, CloudError, explain
 from .config import Config, load_config
 from .drivers import DriverError, build_driver
 
@@ -29,6 +29,17 @@ class Result:
     status: str
     name: str
     detail: str
+
+
+def _check_sealed(path: Path) -> Result:
+    """Token and terminal passwords must be stored encrypted (`vault`)."""
+    from .setup.store import read_raw
+    from .vault import has_plaintext
+
+    name = "Parollar shifrlangan / Secrets sealed"
+    if has_plaintext(read_raw(path)):
+        return Result(WARN, name, "ochiq parol bor — bridge keyingi ishga tushishda o'zi shifrlaydi")
+    return Result(PASS, name, "token va parollar faylda shifrlangan")
 
 
 def _check_permissions(path: Path) -> Result:
@@ -81,12 +92,7 @@ def check_cloud(config: Config, client=None) -> Result:
     try:
         client.heartbeat([])
     except CloudError as exc:
-        text = str(exc)
-        if "HTTP 401" in text or "HTTP 403" in text:
-            return Result(FAIL, name, "token yaroqsiz yoki bridge faolsiz (401). Yangi token oling")
-        if "HTTP" in text:
-            return Result(FAIL, name, f"bulut xato qaytardi: {text}")
-        return Result(FAIL, name, "bulutga ulanib bo'lmadi (internet / DNS / proxy?)")
+        return Result(FAIL, name, explain(exc, config.cloud_url)[1])
     return Result(PASS, name, "token qabul qilindi")
 
 
@@ -160,6 +166,7 @@ def run_checks(path, cloud_client=None, drivers=None) -> list[Result]:
         return [Result(FAIL, "Sozlama / Config", f"{path}: {exc}")]
     results = [
         Result(PASS, "Sozlama / Config", str(path)),
+        _check_sealed(path),
         _check_permissions(path),
         _check_state_permissions(config.state_file),
     ]

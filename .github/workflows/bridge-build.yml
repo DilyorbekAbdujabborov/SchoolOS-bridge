@@ -1,22 +1,14 @@
 name: Bridge binaries
 
 # PyInstaller cannot cross-compile, so one job per OS produces that OS's
-# standalone executables. Run it manually to cut a release, or let it guard
+# standalone executable. Run it manually to cut a release, or let it guard
 # every change so a broken spec never reaches main.
 on:
   push:
     branches: [main]
-    paths:
-      - "schoolos_bridge/**"
-      - "installer/**"
-      - "requirements*.txt"
-      - ".github/workflows/bridge-build.yml"
+    # bridge-vX.Y.Z cuts a signed release (see the `release` job).
+    tags: ["bridge-v*"]
   pull_request:
-    paths:
-      - "schoolos_bridge/**"
-      - "installer/**"
-      - "requirements*.txt"
-      - ".github/workflows/bridge-build.yml"
   workflow_dispatch:
 
 permissions:
@@ -64,19 +56,64 @@ jobs:
           exe=""
           if [ "${RUNNER_OS}" = "Windows" ]; then exe=".exe"; fi
           ./dist/schoolos-bridge${exe} --version
-          ./dist/schoolos-bridge-setup${exe} --version
-          ./dist/schoolos-bridge-setup${exe} --self-test
+          # Assets, drivers and the vault (DPAPI on Windows) in the frozen build.
+          ./dist/schoolos-bridge${exe} --self-test
           ls -l dist/
 
-      - name: Upload executables
+      - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          # Both names, both suffixes: exactly one of each pair exists.
+          # Both suffixes: exactly one exists per OS.
           path: |
             dist/schoolos-bridge
             dist/schoolos-bridge.exe
-            dist/schoolos-bridge-setup
-            dist/schoolos-bridge-setup.exe
           if-no-files-found: error
           retention-days: 14
+
+  # Tag bridge-vX.Y.Z (must equal __version__) -> GitHub Release holding the
+  # three binaries and a manifest signed with BRIDGE_SIGNING_KEY. The cloud
+  # serves that manifest to bridges (BRIDGE_UPDATE_MANIFEST on the server).
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/bridge-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install cryptography requests
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Sign and publish
+        env:
+          BRIDGE_SIGNING_KEY: ${{ secrets.BRIDGE_SIGNING_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#bridge-v}"
+          code_version=$(python -c "import re,pathlib;print(re.search(r'__version__ = \"(.+?)\"', pathlib.Path('schoolos_bridge/__init__.py').read_text()).group(1))")
+          if [ "$version" != "$code_version" ]; then
+            echo "tag $version != __version__ $code_version" >&2; exit 1
+          fi
+          mkdir release
+          cp artifacts/schoolos-bridge-linux/schoolos-bridge release/schoolos-bridge-linux
+          cp artifacts/schoolos-bridge-macos/schoolos-bridge release/schoolos-bridge-macos
+          cp artifacts/schoolos-bridge-windows/schoolos-bridge.exe release/schoolos-bridge-windows.exe
+          python installer/release_manifest.py \
+            --version "$version" \
+            --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}" \
+            --linux release/schoolos-bridge-linux \
+            --macos release/schoolos-bridge-macos \
+            --windows release/schoolos-bridge-windows.exe \
+            --out release/manifest.json
+          gh release create "$GITHUB_REF_NAME" release/* --title "Bridge $version" --notes "Signed bridge build $version"

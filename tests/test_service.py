@@ -8,6 +8,7 @@ from pathlib import Path
 
 from schoolos_bridge.cloud import CloudError, CloudRejected
 from schoolos_bridge.config import Config, DeviceConfig
+from schoolos_bridge.logutil import LOG_BUFFER
 from schoolos_bridge.drivers import DeviceDriver, DriverError, FaceMatch, RawEvent, TerminalPerson
 from schoolos_bridge.listener import make_server
 from schoolos_bridge.service import Bridge
@@ -81,6 +82,12 @@ class FakeCloud:
         self.unmatched_osids = set()
         self.unmatched_uploads = []
         self.upload_fail = False
+        self.logs = []
+
+    def push_logs(self, lines):
+        if self.down:
+            raise CloudError("down")
+        self.logs.extend(lines)
 
     def push_events(self, events):
         if self.down:
@@ -249,6 +256,34 @@ class BridgeTests(unittest.TestCase):
         self.cloud.commands = [{"id": 10, "type": "DELETE", "device_serial": "NOPE", "payload": {"osid": "1"}}]
         self.bridge.tick()
         self.assertEqual(self.cloud.acks, [(10, "FAILED", "unknown device")])
+
+    def test_warnings_are_shipped_to_cloud(self):
+        import logging
+
+        LOG_BUFFER.take(10_000)
+        logging.getLogger().addHandler(LOG_BUFFER)
+        self.addCleanup(logging.getLogger().removeHandler, LOG_BUFFER)
+        logging.getLogger("schoolos_bridge").warning("terminal %s offline", "DEV-1")
+        logging.getLogger("schoolos_bridge").info("noise")
+        self.bridge.tick()
+        self.assertEqual(len(self.cloud.logs), 1)
+        self.assertEqual(self.cloud.logs[0]["level"], "WARNING")
+        self.assertIn("terminal DEV-1 offline", self.cloud.logs[0]["message"])
+
+    def test_logs_kept_for_retry_when_cloud_down(self):
+        import logging
+
+        LOG_BUFFER.take(10_000)
+        logging.getLogger().addHandler(LOG_BUFFER)
+        self.addCleanup(logging.getLogger().removeHandler, LOG_BUFFER)
+        logging.getLogger("schoolos_bridge").error("boom")
+        self.cloud.down = True
+        self.bridge.tick()
+        self.assertEqual(self.cloud.logs, [])
+        self.cloud.down = False
+        self.bridge._last_log_ship = None
+        self.bridge.tick()
+        self.assertTrue(any("boom" in line["message"] for line in self.cloud.logs))
 
     def test_heartbeat_reports_device_ips(self):
         self.bridge.tick()

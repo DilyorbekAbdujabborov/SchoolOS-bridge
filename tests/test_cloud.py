@@ -3,7 +3,7 @@ from unittest import mock
 
 import requests
 
-from schoolos_bridge.cloud import CloudClient, CloudError, CloudRejected
+from schoolos_bridge.cloud import CloudClient, CloudError, CloudRejected, explain
 
 
 def _response(status, json=None, content=b""):
@@ -107,3 +107,41 @@ class CloudRosterPhotoTests(unittest.TestCase):
         client = CloudClient("https://cloud.test/", "tok", session=session)
         with self.assertRaises(CloudRejected):
             client.upload_unmatched("SER-1", "1", "2026-10-10T08:00:00+05:00", b"jpg")
+
+
+class CloudErrorHintTests(unittest.TestCase):
+    def _client(self, status, headers=None):
+        session = mock.Mock()
+        response = _response(status)
+        response.headers = headers or {}
+        session.request.return_value = response
+        return CloudClient("https://tochna.uz", "t", session=session), session
+
+    def test_redirect_is_not_followed_and_is_explained(self):
+        client, session = self._client(301, {"Location": "https://new.example/api/devices/heartbeat/"})
+        with self.assertRaises(CloudError) as ctx:
+            client.heartbeat([])
+        self.assertFalse(session.request.call_args.kwargs["allow_redirects"])
+        code, hint = explain(ctx.exception, client.base_url)
+        self.assertEqual(code, "redirect")
+        self.assertIn("https://new.example/api/devices/heartbeat/", hint)
+
+    def test_wrong_path_is_explained(self):
+        for status in (404, 405):
+            client, _ = self._client(status)
+            with self.assertRaises(CloudError) as ctx:
+                client.heartbeat([])
+            self.assertEqual(explain(ctx.exception)[0], "wrong_url")
+
+    def test_token_and_server_errors(self):
+        self.assertEqual(explain(CloudError("x", status=401))[0], "invalid_token")
+        self.assertEqual(explain(CloudError("x", status=502))[0], "server")
+        self.assertEqual(explain(CloudError("POST heartbeat/: HTTP 403"))[0], "invalid_token")
+
+    def test_tls_and_offline(self):
+        for cause, code in ((requests.exceptions.SSLError(), "tls"), (requests.exceptions.ConnectTimeout(), "timeout"),
+                            (requests.exceptions.ConnectionError(), "unreachable")):
+            try:
+                raise CloudError("down") from cause
+            except CloudError as exc:
+                self.assertEqual(explain(exc)[0], code)

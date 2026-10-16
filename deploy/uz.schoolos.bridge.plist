@@ -12,6 +12,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/schoolos-bridge</string>
+        <string>run</string>
         <string>--config</string>
         <string>/usr/local/etc/schoolos-bridge/config.toml</string>
         <string>--log-file</string>

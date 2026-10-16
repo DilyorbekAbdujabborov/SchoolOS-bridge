@@ -10,10 +10,10 @@ ubuntu/macos/windows runners, and uploads the three artifacts).
 
 The result is written to ``dist/``:
 
-* ``schoolos-bridge``       - the service (run it, or install it as a service);
-* ``schoolos-bridge-setup`` - the setup wizard.
+* ``schoolos-bridge`` - the relay + setup page in one program (on Windows,
+  double-click it and it installs itself).
 
-Neither needs Python on the target machine.
+It does not need Python on the target machine.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ SPEC = HERE / "schoolos-bridge.spec"
 DIST = ROOT / "dist"
 WORK = ROOT / "build"
 
-BINARIES = ("schoolos-bridge", "schoolos-bridge-setup")
+BINARIES = ("schoolos-bridge",)
 
 
 def _exe(name: str) -> str:
