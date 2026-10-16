@@ -1,8 +1,10 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
+from schoolos_bridge import runtime
 from schoolos_bridge.runtime import Runner
 from schoolos_bridge.setup import auth, store
 
@@ -81,3 +83,31 @@ class JwtTests(unittest.TestCase):
             token, _ = auth.Sessions(config).exchange(auth.issue_link(config))
             with self.assertRaises(auth.AuthError):
                 auth.Sessions(config).check(token)  # a restarted bridge
+
+
+class PushHostSyncTests(unittest.TestCase):
+    def _runner_and_bridge(self, listen_host="0.0.0.0"):
+        from types import SimpleNamespace
+
+        driver = mock.Mock()
+        driver.ensure_push_host.return_value = True
+        device = SimpleNamespace(serial="S1", ip="10.0.0.5")
+        config = SimpleNamespace(devices=[device], listen_host=listen_host, listen_port=8099)
+        bridge = SimpleNamespace(config=config, drivers={"S1": driver})
+        return runtime.Runner("/nonexistent.toml"), bridge, driver
+
+    def test_points_terminal_at_lan_ip_and_throttles(self):
+        runner, bridge, driver = self._runner_and_bridge()
+        with mock.patch.object(runtime, "lan_ip_towards", return_value="10.0.0.9"):
+            runner._sync_push_hosts(bridge)
+            runner._sync_push_hosts(bridge)  # within PUSH_HOST_EVERY: skipped
+        driver.ensure_push_host.assert_called_once_with("10.0.0.9", 8099)
+
+    def test_explicit_listen_host_wins_and_unknown_ip_skipped(self):
+        runner, bridge, driver = self._runner_and_bridge("192.168.1.7")
+        runner._sync_push_hosts(bridge)
+        driver.ensure_push_host.assert_called_once_with("192.168.1.7", 8099)
+        runner, bridge, driver = self._runner_and_bridge()
+        with mock.patch.object(runtime, "lan_ip_towards", return_value=None):
+            runner._sync_push_hosts(bridge)
+        driver.ensure_push_host.assert_not_called()

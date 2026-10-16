@@ -10,6 +10,7 @@ setup page is up regardless), so a fresh install starts cleanly too.
 from __future__ import annotations
 
 import logging
+import socket
 import threading
 import time
 from datetime import datetime, timezone
@@ -31,6 +32,21 @@ log = logging.getLogger("schoolos_bridge")
 #: How often the loop looks at the config file while nothing is configured.
 IDLE_SECONDS = 2.0
 
+#: How often each terminal's push host is checked against this machine's IP.
+PUSH_HOST_EVERY = 300.0
+
+
+def lan_ip_towards(target: str) -> str | None:
+    """The local address the OS would use to reach `target` (nothing is sent)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect((target, 80))
+        return sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
 
 class Runner:
     def __init__(self, config_path, listen=True):
@@ -43,6 +59,7 @@ class Runner:
         self._signature = object()  # never equal: the first check always loads
         self._lock = threading.Lock()
         self._last_update_check = None
+        self._last_push_sync = None
 
     # -- config ----------------------------------------------------------------
     def _file_signature(self):
@@ -81,6 +98,7 @@ class Runner:
                 driver.ensure_time()
             except DriverError as exc:
                 log.warning("could not check time on %s: %s", serial, exc)
+        self._last_push_sync = None
         bridge = Bridge(config, CloudClient(config.cloud_url, config.token), drivers, State(config.state_file))
         if self.listen:
             try:
@@ -119,7 +137,30 @@ class Runner:
         bridge = self.bridge
         if bridge is not None:
             bridge.tick()
+            self._sync_push_hosts(bridge)
             self._maybe_update(bridge)
+
+    def _sync_push_hosts(self, bridge) -> None:
+        """Keep every terminal pointed at this machine, so a changed LAN IP does
+        not silently end real-time pushes (and the picture that comes with them)."""
+        if not self.listen:
+            return
+        now = time.monotonic()
+        if self._last_push_sync is not None and now - self._last_push_sync < PUSH_HOST_EVERY:
+            return
+        self._last_push_sync = now
+        config = bridge.config
+        for device in config.devices:
+            host = config.listen_host
+            if host in ("", "0.0.0.0"):
+                host = lan_ip_towards(device.ip)
+            if not host:
+                continue
+            try:
+                if bridge.drivers[device.serial].ensure_push_host(host, config.listen_port):
+                    log.info("push host of %s set to %s:%d", device.serial, host, config.listen_port)
+            except DriverError as exc:
+                log.warning("could not set push host on %s: %s", device.serial, exc)
 
     def _maybe_update(self, bridge) -> None:
         now = time.monotonic()

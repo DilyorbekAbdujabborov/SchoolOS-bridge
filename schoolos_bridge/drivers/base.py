@@ -125,6 +125,11 @@ class DeviceDriver(ABC):
         """Set the terminal's zone to `posix` (e.g. `CST-5:00:00`), keeping its
         time mode. True when something changed."""
 
+    def ensure_push_host(self, host: str, port: int, url: str = "/hik") -> bool:
+        """Make the terminal push its events to `host:port`+`url`. True when the
+        terminal's setting changed. Vendors without a push host leave it a no-op."""
+        return False
+
     def capture(self) -> bytes:
         """A fresh JPEG photo from the terminal's camera, for a CAPTURE command.
         Raises `DriverError` when the terminal cannot take one. Vendors without

@@ -194,6 +194,39 @@ class HikvisionDriver(DeviceDriver):
             raise DriverError(f"time zone not set: {response.text[:200]}")
         return True
 
+    # -- push host -------------------------------------------------------------
+    def ensure_push_host(self, host: str, port: int, url: str = "/hik") -> bool:
+        """Point the terminal's HTTP listening host at this bridge. Only the entry
+        that already uses `url` is rewritten (a new one is added when there is
+        none); the terminal's other hosts are kept as they are."""
+        path = "/ISAPI/Event/notification/httpHosts"
+        text = self._text(path)
+        blocks = re.findall(r"<HttpHostNotification>.*?</HttpHostNotification>", text, re.S)
+        ours = next((b for b in blocks if _tag(b, "url") == url), None)
+        if ours is not None and _tag(ours, "ipAddress") == host and _tag(ours, "portNo") == str(port):
+            return False
+        used = {_tag(b, "id") for b in blocks}
+        host_id = _tag(ours, "id") if ours is not None else next(
+            str(i) for i in range(1, 100) if str(i) not in used
+        )
+        entry = (
+            f"<HttpHostNotification><id>{host_id}</id><url>{url}</url>"
+            "<protocolType>HTTP</protocolType><parameterFormatType>JSON</parameterFormatType>"
+            "<addressingFormatType>ipaddress</addressingFormatType>"
+            f"<ipAddress>{host}</ipAddress><portNo>{port}</portNo>"
+            "<httpAuthenticationMethod>none</httpAuthenticationMethod></HttpHostNotification>"
+        )
+        rest = [b for b in blocks if b is not ours]
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<HttpHostNotificationList version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">'
+            + "".join(rest) + entry + "</HttpHostNotificationList>"
+        )
+        response = self._call("PUT", path, data=xml, headers={"Content-Type": "application/xml"})
+        if "<statusCode>1</statusCode>" not in response.text:
+            raise DriverError(f"push host not set: {response.text[:200]}")
+        return True
+
     # -- camera ----------------------------------------------------------------
     def capture(self) -> bytes:
         """A JPEG snapshot from the terminal's camera. Tries each known snapshot
