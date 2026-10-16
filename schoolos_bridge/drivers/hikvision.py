@@ -231,7 +231,7 @@ class HikvisionDriver(DeviceDriver):
         return matches
 
     # -- events ----------------------------------------------------------------
-    def _event(self, osid, time, cursor, verify_mode, raw) -> RawEvent:
+    def _event(self, osid, time, cursor, verify_mode, raw, picture=None) -> RawEvent:
         return RawEvent(
             device_serial=self.serial,
             osid=str(osid),
@@ -240,6 +240,7 @@ class HikvisionDriver(DeviceDriver):
             verify_mode=verify_mode or "",
             cursor=int(cursor),
             raw=raw,
+            picture=picture,
         )
 
     def fetch_events(self, after_cursor: int | None, since: str | None = None) -> list[RawEvent]:
@@ -286,6 +287,7 @@ class HikvisionDriver(DeviceDriver):
 
     def parse_push(self, body: bytes, content_type: str) -> list[RawEvent]:
         payloads = []
+        picture = None
         if content_type.startswith("multipart/"):
             message = message_from_bytes(
                 b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + body, policy=email_policy
@@ -293,6 +295,10 @@ class HikvisionDriver(DeviceDriver):
             for part in message.iter_parts():
                 if part.get_content_type() == "application/json":
                     payloads.append(part.get_payload(decode=True))
+                elif picture is None and part.get_content_type() == "image/jpeg":
+                    data = part.get_payload(decode=True)
+                    if data and data.startswith(JPEG_SOI):
+                        picture = data
         else:
             payloads.append(body)
         events = []
@@ -310,7 +316,8 @@ class HikvisionDriver(DeviceDriver):
             ):
                 events.append(
                     self._event(ace["employeeNoString"], data["dateTime"], ace.get("serialNo", 0),
-                                ace.get("currentVerifyMode"), {"serialNo": ace.get("serialNo")})
+                                ace.get("currentVerifyMode"), {"serialNo": ace.get("serialNo")},
+                                picture)
                 )
         return events
 

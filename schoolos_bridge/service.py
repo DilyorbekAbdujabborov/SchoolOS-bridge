@@ -62,6 +62,10 @@ class Bridge:
                 existing = index.get((serial, event.cursor))
                 if existing is not None:
                     existing["advance"] = existing["advance"] or advance
+                    # A push carries the picture a poll of the same event lacks.
+                    payload = event.to_cloud()
+                    if "photo" in payload and "photo" not in existing["event"]:
+                        existing["event"]["photo"] = payload["photo"]
                     continue
                 if len(self.state.outbox) >= MAX_OUTBOX:
                     # Not lost: polled events are re-fetched past the cursor,
