@@ -2,8 +2,13 @@
 vendor is one adapter, so a new terminal type is a new file here — never a
 cloud change."""
 
+import base64
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+
+
+#: Larger pictures are not sent — the cloud would drop them anyway.
+MAX_PICTURE_BYTES = 400 * 1024
 
 
 class DriverError(Exception):
@@ -59,9 +64,11 @@ class RawEvent:
     verify_mode: str
     cursor: int  # monotonically increasing per device
     raw: dict = field(default_factory=dict)
+    #: JPEG the terminal attached to the event (push only), if any.
+    picture: bytes | None = None
 
     def to_cloud(self) -> dict:
-        return {
+        data = {
             "device_serial": self.device_serial,
             "osid": self.osid,
             "event_time": self.event_time,
@@ -69,6 +76,9 @@ class RawEvent:
             "verify_mode": self.verify_mode,
             "raw": self.raw,
         }
+        if self.picture and len(self.picture) <= MAX_PICTURE_BYTES:
+            data["photo"] = base64.b64encode(self.picture).decode("ascii")
+        return data
 
 
 class DeviceDriver(ABC):
