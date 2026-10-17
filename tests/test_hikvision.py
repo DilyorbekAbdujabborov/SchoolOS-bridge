@@ -150,6 +150,40 @@ class HikvisionDriverTests(unittest.TestCase):
         self.assertEqual((method, path), ("PUT", "/ISAPI/System/time"))
         self.assertIn("<timeZone>CST-5:00:00</timeZone>", self.http.request.call_args.kwargs["data"])
 
+    HOSTS = (
+        '<HttpHostNotificationList version="2.0" xmlns="http://www.isapi.org/ver20/XMLSchema">'
+        "<HttpHostNotification><id>1</id><url>/hik</url><ipAddress>%s</ipAddress><portNo>%s</portNo></HttpHostNotification>"
+        "<HttpHostNotification><id>2</id><url>/other</url><ipAddress>9.9.9.9</ipAddress><portNo>80</portNo></HttpHostNotification>"
+        "</HttpHostNotificationList>"
+    )
+    PUT_OK = "<ResponseStatus><statusCode>1</statusCode></ResponseStatus>"
+
+    def test_push_host_unchanged_is_not_written(self):
+        self.http.request.return_value = _resp(text=self.HOSTS % ("10.0.0.9", "8099"))
+        self.assertFalse(self.driver.ensure_push_host("10.0.0.9", 8099))
+        self.assertEqual([m for m, _ in self.calls()], ["GET"])
+
+    def test_push_host_rewrites_only_our_entry(self):
+        self.http.request.side_effect = [_resp(text=self.HOSTS % ("10.0.0.2", "8099")), _resp(text=self.PUT_OK)]
+        self.assertTrue(self.driver.ensure_push_host("10.0.0.9", 8099))
+        self.assertEqual(self.calls()[1], ("PUT", "/ISAPI/Event/notification/httpHosts"))
+        xml = self.http.request.call_args.kwargs["data"]
+        self.assertIn("<ipAddress>10.0.0.9</ipAddress>", xml)
+        self.assertNotIn("10.0.0.2", xml)
+        self.assertIn("<url>/other</url>", xml)  # the terminal's other host stays
+
+    def test_push_host_added_when_none(self):
+        empty = '<HttpHostNotificationList version="2.0"></HttpHostNotificationList>'
+        self.http.request.side_effect = [_resp(text=empty), _resp(text=self.PUT_OK)]
+        self.assertTrue(self.driver.ensure_push_host("10.0.0.9", 8099))
+        xml = self.http.request.call_args.kwargs["data"]
+        self.assertIn("<id>1</id><url>/hik</url>", xml)
+
+    def test_push_host_rejected_raises(self):
+        self.http.request.side_effect = [_resp(text="<x/>"), _resp(text="<ResponseStatus><statusCode>4</statusCode></ResponseStatus>")]
+        with self.assertRaises(DriverError):
+            self.driver.ensure_push_host("10.0.0.9", 8099)
+
     def test_ensure_time_leaves_correct_clock(self):
         from datetime import datetime
 
